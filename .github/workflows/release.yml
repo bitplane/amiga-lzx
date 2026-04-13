@@ -42,13 +42,17 @@ jobs:
           TAG="${GITHUB_REF##*/}"             # v0.1.0
           TAG_VERSION="${TAG#v}"              # 0.1.0
           # Pull the version from [workspace.package] in the root Cargo.toml.
+          # Uses awk match() rather than a greedy gsub regex (the previous
+          # `gsub(/.*"|".*/, "")` matched the whole line up to the LAST
+          # quote and produced an empty string).
           MANIFEST_VERSION=$(awk '
             /^\[workspace\.package\]/ { in_block=1; next }
             /^\[/                      { in_block=0 }
             in_block && /^version[[:space:]]*=/ {
-              gsub(/.*"|".*/, "")
-              print
-              exit
+              if (match($0, /"[^"]+"/)) {
+                print substr($0, RSTART+1, RLENGTH-2)
+                exit
+              }
             }
           ' Cargo.toml)
           echo "tag      = $TAG_VERSION"
