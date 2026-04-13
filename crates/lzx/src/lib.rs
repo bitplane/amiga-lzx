@@ -7,6 +7,7 @@ pub mod bitio;
 pub mod block;
 pub mod constants;
 pub mod crc32;
+pub mod decoder;
 pub mod error;
 pub mod hash;
 pub mod huffman;
