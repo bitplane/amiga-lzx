@@ -250,13 +250,13 @@ mod tests {
     fn skewed_distribution_kraft_valid() {
         let mut freqs = vec![0u32; 768];
         // Heavy tail to stress the builder.
-        for i in 0..768 {
-            freqs[i] = (i as u32 + 1) * 3;
+        for (i, slot) in freqs.iter_mut().enumerate() {
+            *slot = (i as u32 + 1) * 3;
         }
         let l = build_lengths(&freqs, 16);
         assert!(kraft_sum_valid(&l, 16));
         for &li in &l {
-            assert!(li >= 1 && li <= 16);
+            assert!((1..=16).contains(&li));
         }
     }
 

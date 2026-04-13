@@ -23,7 +23,7 @@ pub fn make_decode_table(
     lengths: &[u8],
 ) -> Result<Vec<u16>> {
     debug_assert_eq!(lengths.len(), number_symbols);
-    debug_assert!(table_size >= 1 && table_size <= 12);
+    debug_assert!((1..=12).contains(&table_size));
     // Secondary node IDs start at `table_mask >> 1` and must stay above
     // the symbol-ID range so the decoder can disambiguate symbols from
     // pointer-to-secondary-node entries with `sym >= number_symbols`.
@@ -46,8 +46,8 @@ pub fn make_decode_table(
 
     // --- Pass 1: codes that fit in the root table ---
     for bit_num in 1..=table_size {
-        for symbol in 0..number_symbols {
-            if lengths[symbol] as u32 != bit_num {
+        for (symbol, &len) in lengths.iter().enumerate() {
+            if len as u32 != bit_num {
                 continue;
             }
             // Reverse the full table_size-wide pos to get the starting leaf.
@@ -101,8 +101,8 @@ pub fn make_decode_table(
     let mut bit_mask: u32 = 32768;
 
     for bit_num in (table_size + 1)..=16 {
-        for symbol in 0..number_symbols {
-            if lengths[symbol] as u32 != bit_num {
+        for (symbol, &len) in lengths.iter().enumerate() {
+            if len as u32 != bit_num {
                 continue;
             }
             // Reverse the high (table_size) bits of pos to find the root index.
@@ -225,11 +225,11 @@ mod tests {
     #[test]
     fn full_main_tree_round_trip() {
         let mut freqs = vec![0u32; 768];
-        for i in 0..256 {
-            freqs[i] = 5 + (i as u32 % 17);
+        for (i, slot) in freqs.iter_mut().enumerate().take(256) {
+            *slot = 5 + (i as u32 % 17);
         }
-        for i in 256..768 {
-            freqs[i] = if i % 7 == 0 { 12 } else { 1 };
+        for (i, slot) in freqs.iter_mut().enumerate().skip(256) {
+            *slot = if i % 7 == 0 { 12 } else { 1 };
         }
         let symbols: Vec<u16> = (0..768u16).chain(0..256u16).collect();
         round_trip(&freqs, &symbols, 768, 12);

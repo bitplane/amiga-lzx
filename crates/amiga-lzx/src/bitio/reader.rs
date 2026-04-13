@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn long_random_round_trip() {
         // Deterministic xorshift PRNG so this stays a fast unit test.
-        let mut state: u64 = 0xc0ffee_1234_5678;
+        let mut state: u64 = 0x00c0_ffee_1234_5678;
         let mut next = || {
             state ^= state << 13;
             state ^= state >> 7;

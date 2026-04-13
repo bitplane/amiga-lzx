@@ -123,7 +123,7 @@ impl DateTime {
             (false, secs_since_epoch)
         };
 
-        let days = (secs / 86_400) as i64;
+        let days = secs / 86_400;
         let day_secs = (secs % 86_400) as u32;
         let hour = (day_secs / 3600) as u8;
         let minute = ((day_secs % 3600) / 60) as u8;

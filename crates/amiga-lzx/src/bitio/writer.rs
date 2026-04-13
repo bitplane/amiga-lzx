@@ -43,7 +43,7 @@ impl<W: Write> BitWriter<W> {
     /// Write the low `n` bits of `value`. `n` must be in `1..=24` so the
     /// 32-bit buffer can never overflow (max prior content 15 bits).
     pub fn write_bits(&mut self, value: u32, n: u32) -> Result<()> {
-        debug_assert!(n >= 1 && n <= 24, "write_bits n out of range: {n}");
+        debug_assert!((1..=24).contains(&n), "write_bits n out of range: {n}");
         debug_assert!(
             n == 32 || value < (1u32 << n),
             "value {value} doesn't fit in {n} bits"

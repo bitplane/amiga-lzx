@@ -93,8 +93,7 @@ fn create(archive: &Path, roots: &[PathBuf], level: Level) -> io::Result<()> {
     }
 
     let out = BufWriter::new(File::create(archive)?);
-    let mut ar =
-        ArchiveWriter::new(out).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let mut ar = ArchiveWriter::new(out).map_err(|e| io::Error::other(e.to_string()))?;
 
     for (path, name) in &inputs {
         let data = fs::read(path)?;
@@ -105,15 +104,14 @@ fn create(archive: &Path, roots: &[PathBuf], level: Level) -> io::Result<()> {
                     .level(level)
                     .datetime(datetime),
             )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         entry.write_all(&data)?;
         entry
             .finish()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         eprintln!("  + {} ({} bytes)", name, data.len());
     }
-    ar.finish()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    ar.finish().map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
 }
 
@@ -122,7 +120,7 @@ fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
     let mut reader = open_reader(archive)?;
     while let Some(entry) = reader
         .next_entry()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+        .map_err(|e| io::Error::other(e.to_string()))?
     {
         // Defensive: refuse absolute paths and parent-traversal segments
         // so a malicious archive can't write outside outdir.
@@ -159,7 +157,7 @@ fn list(archive: &Path) -> io::Result<()> {
     println!("{:>10}  {:>10}  {:<}", "size", "crc32", "name");
     while let Some(entry) = reader
         .next_entry()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+        .map_err(|e| io::Error::other(e.to_string()))?
     {
         println!(
             "{:>10}  {:>08x}  {}",
@@ -176,7 +174,7 @@ fn test(archive: &Path) -> io::Result<()> {
     let mut count = 0;
     while let Some(entry) = reader
         .next_entry()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+        .map_err(|e| io::Error::other(e.to_string()))?
     {
         count += 1;
         eprintln!("  ok {}", entry.filename);
@@ -187,7 +185,7 @@ fn test(archive: &Path) -> io::Result<()> {
 
 fn open_reader(archive: &Path) -> io::Result<ArchiveReader<BufReader<File>>> {
     let f = BufReader::new(File::open(archive)?);
-    ArchiveReader::new(f).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+    ArchiveReader::new(f).map_err(|e| io::Error::other(e.to_string()))
 }
 
 /// Read the mtime from a file's metadata, convert it to a

@@ -97,8 +97,8 @@ pub fn build_slot_lookup() -> [u8; SLOT_LOOKUP_LEN] {
             break;
         }
         let end = (base + width).min(SLOT_LOOKUP_LEN);
-        for i in base..end {
-            t[i] = slot as u8;
+        for slot_entry in &mut t[base..end] {
+            *slot_entry = slot as u8;
         }
     }
     // Sanity: slot 17 is the last one that fully fits (384..511); slot 18
@@ -178,17 +178,17 @@ mod tests {
 
     #[test]
     fn table_three_is_power_mask() {
-        for n in 0..16 {
-            assert_eq!(TABLE_THREE[n], (1u32 << n) - 1, "n={n}");
+        for (n, &mask) in TABLE_THREE.iter().enumerate() {
+            assert_eq!(mask, (1u32 << n) - 1, "n={n}");
         }
     }
 
     #[test]
     fn table_one_matches_expected() {
         // Each pair has the same footer bit count, progressing 0,0,0,0,1,1,...
-        for s in 0..32 {
+        for (s, &actual) in TABLE_ONE.iter().enumerate() {
             let expected = if s < 4 { 0 } else { (s / 2 - 1) as u8 };
-            assert_eq!(TABLE_ONE[s], expected, "slot {s}");
+            assert_eq!(actual, expected, "slot {s}");
         }
     }
 

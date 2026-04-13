@@ -341,8 +341,8 @@ mod tests {
     fn literal_section_no_runs() {
         let prev = vec![0u8; 256];
         let mut curr = vec![0u8; 256];
-        for i in 0..256 {
-            curr[i] = ((i % 13) + 1) as u8;
+        for (i, slot) in curr.iter_mut().enumerate() {
+            *slot = ((i % 13) + 1) as u8;
         }
         round_trip_section(Section::Literal, &prev, &curr);
     }
@@ -351,8 +351,8 @@ mod tests {
     fn literal_section_with_zero_runs() {
         let prev = vec![5u8; 256];
         let mut curr = vec![0u8; 256];
-        for i in 100..120 {
-            curr[i] = 4;
+        for slot in &mut curr[100..120] {
+            *slot = 4;
         }
         round_trip_section(Section::Literal, &prev, &curr);
     }
@@ -361,11 +361,11 @@ mod tests {
     fn match_section_with_long_zero_runs() {
         let prev = vec![3u8; 512];
         let mut curr = vec![0u8; 512];
-        for i in 0..10 {
-            curr[i] = 7;
+        for slot in &mut curr[0..10] {
+            *slot = 7;
         }
-        for i in 500..512 {
-            curr[i] = 8;
+        for slot in &mut curr[500..512] {
+            *slot = 8;
         }
         round_trip_section(Section::Match, &prev, &curr);
     }
