@@ -97,7 +97,10 @@ mod tests {
 
     #[test]
     fn quick_brown_fox() {
-        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414fa339);
+        assert_eq!(
+            crc32(b"The quick brown fox jumps over the lazy dog"),
+            0x414fa339
+        );
     }
 
     #[test]

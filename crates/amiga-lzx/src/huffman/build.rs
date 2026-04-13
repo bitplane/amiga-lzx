@@ -46,10 +46,7 @@ pub fn build_lengths(freqs: &[u32], max_len: u8) -> Vec<u8> {
 
     // Arena of tree nodes. Each "coin" we manipulate references a node in
     // this arena. Leaves come first (one per active symbol).
-    let mut arena: Vec<Node> = active
-        .iter()
-        .map(|&(_, sym)| Node::Leaf(sym))
-        .collect();
+    let mut arena: Vec<Node> = active.iter().map(|&(_, sym)| Node::Leaf(sym)).collect();
 
     // The "original" sorted-symbol coin list; this is the per-level seed.
     let original: Vec<Coin> = active

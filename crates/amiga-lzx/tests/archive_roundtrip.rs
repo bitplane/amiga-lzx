@@ -6,7 +6,7 @@
 
 use std::io::{Cursor, Write};
 
-use lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryAttrs, EntryBuilder, Level};
+use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryAttrs, EntryBuilder, Level};
 
 fn round_trip(name: &str, payload: &[u8], level: Level) {
     let buf: Vec<u8> = Vec::new();
@@ -103,7 +103,10 @@ fn multi_entry_archive() {
         for (name, payload) in &[
             ("first.txt", &b"hello world"[..]),
             ("second.bin", &[0u8; 1000][..]),
-            ("third.txt", &b"the quick brown fox jumps over the lazy dog"[..]),
+            (
+                "third.txt",
+                &b"the quick brown fox jumps over the lazy dog"[..],
+            ),
         ] {
             let mut e = ar.add_entry(EntryBuilder::new(*name)).unwrap();
             e.write_all(payload).unwrap();
@@ -131,13 +134,13 @@ fn multi_entry_archive() {
 /// the encoder (which never emits merged groups).
 #[test]
 fn handcrafted_merged_group_round_trip() {
-    use lzx::block::BlockWriter;
-    use lzx::constants::{
+    use amiga_lzx::block::BlockWriter;
+    use amiga_lzx::constants::{
         ENTRY_HEADER_HOST_OS, ENTRY_HEADER_LEN, ENTRY_HEADER_MACHINE, ENTRY_HEADER_PACK_MODE,
         INFO_HEADER_FLAGS, INFO_HEADER_LEN, INFO_HEADER_MAGIC, INFO_HEADER_VERSION, LEVEL_NORMAL,
     };
-    use lzx::crc32::{crc32, Crc32};
-    use lzx::lz77;
+    use amiga_lzx::crc32::{crc32, Crc32};
+    use amiga_lzx::lz77;
 
     // Two payloads we'll merge into one shared LZX stream.
     let payload_a = b"This is the first file. It contains some text.";
@@ -213,7 +216,7 @@ fn handcrafted_merged_group_round_trip() {
     archive.extend_from_slice(&compressed_payload);
 
     // Now read it back through ArchiveReader and verify both entries.
-    let mut reader = lzx::ArchiveReader::new(Cursor::new(&archive)).unwrap();
+    let mut reader = amiga_lzx::ArchiveReader::new(Cursor::new(&archive)).unwrap();
     let e1 = reader.next_entry().unwrap().expect("first entry");
     assert_eq!(e1.filename, "first.txt");
     assert_eq!(e1.data, payload_a);

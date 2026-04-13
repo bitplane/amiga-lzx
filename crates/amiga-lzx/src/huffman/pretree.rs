@@ -132,9 +132,7 @@ pub fn analyse_section(
                 if run_len <= section.sym17_max() {
                     let r = run_len.min(section.sym17_max());
                     freqs[17] += 1;
-                    ops.push(PretreeOp::ZeroRunShort {
-                        run: r,
-                    });
+                    ops.push(PretreeOp::ZeroRunShort { run: r });
                     i += r;
                     continue;
                 } else {
@@ -194,20 +192,35 @@ pub fn emit_section<W: std::io::Write>(
     for op in ops {
         match *op {
             PretreeOp::Single { delta } => {
-                writer.write_bits(reversed[delta as usize], pretree_lengths[delta as usize] as u32)?;
+                writer.write_bits(
+                    reversed[delta as usize],
+                    pretree_lengths[delta as usize] as u32,
+                )?;
             }
             PretreeOp::ZeroRunShort { run } => {
                 writer.write_bits(reversed[17], pretree_lengths[17] as u32)?;
-                writer.write_bits((run - section.sym17_base()) as u32, section.sym17_extra_bits())?;
+                writer.write_bits(
+                    (run - section.sym17_base()) as u32,
+                    section.sym17_extra_bits(),
+                )?;
             }
             PretreeOp::ZeroRunLong { run } => {
                 writer.write_bits(reversed[18], pretree_lengths[18] as u32)?;
-                writer.write_bits((run - section.sym18_base()) as u32, section.sym18_extra_bits())?;
+                writer.write_bits(
+                    (run - section.sym18_base()) as u32,
+                    section.sym18_extra_bits(),
+                )?;
             }
             PretreeOp::SameRun { run, delta } => {
                 writer.write_bits(reversed[19], pretree_lengths[19] as u32)?;
-                writer.write_bits((run - section.sym19_base()) as u32, section.sym19_extra_bits())?;
-                writer.write_bits(reversed[delta as usize], pretree_lengths[delta as usize] as u32)?;
+                writer.write_bits(
+                    (run - section.sym19_base()) as u32,
+                    section.sym19_extra_bits(),
+                )?;
+                writer.write_bits(
+                    reversed[delta as usize],
+                    pretree_lengths[delta as usize] as u32,
+                )?;
             }
         }
     }
@@ -230,7 +243,8 @@ pub fn decode_section<R: Read>(
         *slot = reader.read_bits_u8(PRETREE_LENGTH_BITS)?;
     }
 
-    let pretree_table = make_decode_table(PRETREE_NUM_SYMBOLS, PRETREE_TABLE_BITS, &pretree_lengths)?;
+    let pretree_table =
+        make_decode_table(PRETREE_NUM_SYMBOLS, PRETREE_TABLE_BITS, &pretree_lengths)?;
 
     let n = out.len();
     let mut i = 0;

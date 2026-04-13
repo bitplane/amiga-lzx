@@ -1,12 +1,14 @@
 [package]
-name = "lzx"
+name = "amiga-lzx"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Pure-Rust LZX (Amiga) compressor and decompressor"
+description = "Pure-Rust compressor and decompressor for the Amiga LZX archive format"
+keywords = ["amiga", "lzx", "compression", "archive", "lz77"]
+categories = ["compression"]
 
 [dependencies]
 thiserror.workspace = true

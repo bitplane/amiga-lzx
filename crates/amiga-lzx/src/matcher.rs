@@ -26,7 +26,10 @@ pub struct Match {
 }
 
 impl Match {
-    pub const NONE: Match = Match { length: 0, distance: 0 };
+    pub const NONE: Match = Match {
+        length: 0,
+        distance: 0,
+    };
     pub fn is_useful(&self) -> bool {
         self.length >= MIN_MATCH
     }

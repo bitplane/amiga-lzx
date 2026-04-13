@@ -166,7 +166,11 @@ impl<R: Read> Decoder<R> {
                 }
 
                 // Slot 0 with no extra bits → use last_offset cache.
-                let dist = if distance == 0 { self.last_offset } else { distance };
+                let dist = if distance == 0 {
+                    self.last_offset
+                } else {
+                    distance
+                };
                 if dist == 0 {
                     return Err(Error::InvalidArchive("zero match distance"));
                 }

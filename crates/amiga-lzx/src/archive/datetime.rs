@@ -19,12 +19,12 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateTime {
-    pub year: u16,   // absolute year, 1970..=2033
-    pub month: u8,   // 1..=12
-    pub day: u8,     // 1..=31
-    pub hour: u8,    // 0..=23
-    pub minute: u8,  // 0..=59
-    pub second: u8,  // 0..=59
+    pub year: u16,  // absolute year, 1970..=2033
+    pub month: u8,  // 1..=12
+    pub day: u8,    // 1..=31
+    pub hour: u8,   // 0..=23
+    pub minute: u8, // 0..=59
+    pub second: u8, // 0..=59
 }
 
 impl DateTime {
@@ -48,7 +48,14 @@ impl DateTime {
         minute: u8,
         second: u8,
     ) -> Result<Self> {
-        let dt = DateTime { year, month, day, hour, minute, second };
+        let dt = DateTime {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        };
         dt.validate()?;
         Ok(dt)
     }

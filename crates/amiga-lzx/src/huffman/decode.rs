@@ -58,9 +58,7 @@ pub fn make_decode_table(
                 reverse >>= 1;
             }
             // Advance the canonical-position counter; abort if we'd overrun.
-            pos = pos
-                .checked_add(bit_mask)
-                .ok_or(Error::BadHuffmanTree)?;
+            pos = pos.checked_add(bit_mask).ok_or(Error::BadHuffmanTree)?;
             if pos > table_mask {
                 return Err(Error::BadHuffmanTree);
             }
@@ -132,9 +130,7 @@ pub fn make_decode_table(
                 leaf += (pos >> (15 - fill)) & 1;
             }
             table[leaf as usize] = symbol as u16;
-            pos = pos
-                .checked_add(bit_mask)
-                .ok_or(Error::BadHuffmanTree)?;
+            pos = pos.checked_add(bit_mask).ok_or(Error::BadHuffmanTree)?;
             if pos > table_mask_shifted {
                 return Err(Error::BadHuffmanTree);
             }

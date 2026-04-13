@@ -1,0 +1,20 @@
+[package]
+name = "amiga-lzx-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Command-line front-end for the amiga-lzx crate"
+keywords = ["amiga", "lzx", "compression", "archive", "cli"]
+categories = ["command-line-utilities", "compression"]
+
+# Keep the historic Amiga binary name so users still type `lzx`.
+[[bin]]
+name = "lzx"
+path = "src/main.rs"
+
+[dependencies]
+amiga-lzx = { path = "../amiga-lzx", version = "0.1.0" }
+clap.workspace = true

@@ -68,7 +68,10 @@ impl<W: Write> BlockWriter<W> {
                 Token::Match { length, .. } => *length as usize,
             })
             .sum();
-        debug_assert!(source_len < (1 << 24), "block source length overflow 24 bits");
+        debug_assert!(
+            source_len < (1 << 24),
+            "block source length overflow 24 bits"
+        );
 
         // 2. Build the new main-tree code lengths from the freqs. Length
         // limit 16. Save the previous lengths first so the pretree

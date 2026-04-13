@@ -1,9 +1,9 @@
-//! Real-world LZX samples from <https://sembiance.com/fileFormatSamples/archive/lzx/>.
+//! Real-world Amiga LZX samples from <https://sembiance.com/fileFormatSamples/archive/lzx/>.
 //!
 //! `#[ignore]`-gated so it only runs on demand:
 //!
 //! ```bash
-//! cargo test -p lzx --test sembiance_samples -- --ignored --nocapture
+//! cargo test -p amiga-lzx --test sembiance_samples -- --ignored --nocapture
 //! ```
 //!
 //! On first run, downloads the 11 samples to a project-local cache via
@@ -15,7 +15,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
 
-use lzx::{ArchiveReader, ArchiveWriter, EntryBuilder, Level};
+use amiga_lzx::{ArchiveReader, ArchiveWriter, EntryBuilder, Level};
 use std::io::Write;
 
 const BASE_URL: &str = "https://sembiance.com/fileFormatSamples/archive/lzx";
@@ -32,7 +32,10 @@ const SAMPLES: &[(&str, &str)] = &[
     ("test.lzx", "test.lzx"),
     ("xpk_compress.lzx", "xpk_compress.lzx"),
     ("%C2%A1tsa%21_astralrmx11.lzx", "tsa_astralrmx11.lzx"),
-    ("%C2%A1tsa%21_aztecchallengec64.lzx", "tsa_aztecchallengec64.lzx"),
+    (
+        "%C2%A1tsa%21_aztecchallengec64.lzx",
+        "tsa_aztecchallengec64.lzx",
+    ),
     ("%C2%A1tsa%21_lowlevel.lzx", "tsa_lowlevel.lzx"),
 ];
 

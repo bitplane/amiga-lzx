@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lzx", "crates/lzx-cli"]
+members = ["crates/amiga-lzx", "crates/amiga-lzx-cli"]
 
 [workspace.package]
 version = "0.1.0"

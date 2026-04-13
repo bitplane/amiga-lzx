@@ -6,9 +6,9 @@ use std::io::{Seek, SeekFrom, Write};
 use crate::archive::{DateTime, EntryAttrs};
 use crate::block::BlockWriter;
 use crate::constants::{
-    BLOCK_TOKEN_LIMIT, ENTRY_HEADER_HOST_OS, ENTRY_HEADER_LEN, ENTRY_HEADER_MACHINE,
+    LevelParams, BLOCK_TOKEN_LIMIT, ENTRY_HEADER_HOST_OS, ENTRY_HEADER_LEN, ENTRY_HEADER_MACHINE,
     ENTRY_HEADER_PACK_MODE, INFO_HEADER_FLAGS, INFO_HEADER_LEN, INFO_HEADER_MAGIC,
-    INFO_HEADER_VERSION, LEVEL_NORMAL, LEVEL_QUICK, LEVEL_MAX, LevelParams,
+    INFO_HEADER_VERSION, LEVEL_MAX, LEVEL_NORMAL, LEVEL_QUICK,
 };
 use crate::crc32::{crc32, Crc32};
 use crate::error::{Error, Result};

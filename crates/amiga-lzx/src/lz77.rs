@@ -86,12 +86,7 @@ pub fn encode(input: &[u8], level: &LevelParams) -> Vec<Token> {
     tokens
 }
 
-fn ensure_hashed(
-    input: &[u8],
-    chains: &mut HashChains,
-    hashed_up_to: &mut usize,
-    target: usize,
-) {
+fn ensure_hashed(input: &[u8], chains: &mut HashChains, hashed_up_to: &mut usize, target: usize) {
     let limit = (target + 1).min(input.len().saturating_sub(MIN_MATCH - 1));
     while *hashed_up_to < limit {
         let p = *hashed_up_to;
@@ -139,7 +134,7 @@ fn lazy_better(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{LEVEL_NORMAL, LEVEL_QUICK, LEVEL_MAX};
+    use crate::constants::{LEVEL_MAX, LEVEL_NORMAL, LEVEL_QUICK};
 
     fn token_count_matches_input(tokens: &[Token]) -> usize {
         tokens

@@ -3,11 +3,11 @@ use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryBuilder, Level};
 use clap::{Parser, Subcommand};
-use lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryBuilder, Level};
 
 #[derive(Parser, Debug)]
-#[command(name = "lzx", version, about = "LZX (Amiga) archiver")]
+#[command(name = "lzx", version, about = "Amiga LZX archiver")]
 struct Args {
     /// Quick compression (lazy threshold 1).
     #[arg(short = '1', global = true)]
@@ -79,7 +79,10 @@ fn main() -> ExitCode {
 
 fn create(archive: &Path, roots: &[PathBuf], level: Level) -> io::Result<()> {
     if roots.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "no input files"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no input files",
+        ));
     }
     let inputs = collect_inputs(roots)?;
     if inputs.is_empty() {
@@ -227,9 +230,7 @@ fn collect_inputs(roots: &[PathBuf]) -> io::Result<Vec<(PathBuf, String)>> {
             let name = root
                 .file_name()
                 .and_then(|n| n.to_str())
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "non-UTF8 filename")
-                })?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "non-UTF8 filename"))?
                 .to_owned();
             out.push((root.clone(), name));
         } else if ft.is_dir() {
@@ -237,9 +238,7 @@ fn collect_inputs(roots: &[PathBuf]) -> io::Result<Vec<(PathBuf, String)>> {
             let prefix = root
                 .file_name()
                 .and_then(|n| n.to_str())
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "non-UTF8 directory")
-                })?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "non-UTF8 directory"))?
                 .to_owned();
             walk_dir(root, &prefix, &mut out)?;
         } else {
@@ -250,9 +249,7 @@ fn collect_inputs(roots: &[PathBuf]) -> io::Result<Vec<(PathBuf, String)>> {
 }
 
 fn walk_dir(dir: &Path, prefix: &str, out: &mut Vec<(PathBuf, String)>) -> io::Result<()> {
-    let mut entries: Vec<_> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
     entries.sort_by_key(|e| e.file_name());
     for ent in entries {
         let path = ent.path();

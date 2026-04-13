@@ -91,9 +91,7 @@ impl<R: Read> ArchiveReader<R> {
         // `compressed_size > 0` (the tail carrying the shared payload).
         let mut group = vec![first];
         while group.last().unwrap().compressed_size == 0 {
-            let next = self
-                .read_entry_meta()?
-                .ok_or(Error::Truncated)?;
+            let next = self.read_entry_meta()?.ok_or(Error::Truncated)?;
             if next.merged_flag == 0 {
                 return Err(Error::InvalidArchive(
                     "merged-group entry without merged_flag",
@@ -103,8 +101,7 @@ impl<R: Read> ArchiveReader<R> {
         }
 
         let tail_compressed = group.last().unwrap().compressed_size as usize;
-        let total_uncompressed: u64 =
-            group.iter().map(|m| m.original_size as u64).sum();
+        let total_uncompressed: u64 = group.iter().map(|m| m.original_size as u64).sum();
 
         let mut payload = vec![0u8; tail_compressed];
         self.inner
