@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/lzx", "crates/lzx-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+authors = ["Gareth Davidson <gaz@bitplane.net>"]
+repository = "https://github.com/bitplane/lzx-rs"
+
+[workspace.dependencies]
+thiserror = "1"
+bitflags = "2"
+clap = { version = "4", features = ["derive"] }
+proptest = "1"
+tempfile = "3"
