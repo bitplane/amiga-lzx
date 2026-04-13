@@ -80,10 +80,14 @@ impl<R: Read> BitReader<R> {
     }
 
     /// Read the low `n` bits of the next code without consuming them. The
-    /// requested width must satisfy `1..=16`. Triggers refills as needed
-    /// to make the bits available.
+    /// requested width must satisfy `0..=16`; `n == 0` is a no-op that
+    /// returns 0 (used by the aligned-offset path when `pbits == 3` and
+    /// `top_bits = pbits - 3` is zero). Triggers refills as needed.
     pub fn peek_bits(&mut self, n: u32) -> Result<u32> {
-        debug_assert!(n >= 1 && n <= 16);
+        debug_assert!(n <= 16);
+        if n == 0 {
+            return Ok(0);
+        }
         // Make sure at least 16 bits are present (after ≥1 refill the
         // accumulator always holds 16+ valid bits unless we hit EOF).
         while self.shift < 0 {

@@ -13,6 +13,8 @@
 //!
 //! Stored in 4 bytes **big-endian**, unlike the rest of the entry header.
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +96,85 @@ impl DateTime {
             second: (temp & 63) as u8,
         }
     }
+
+    /// Convert a `SystemTime` (interpreted as seconds since the Unix
+    /// epoch) into an LZX `DateTime`, clamping out-of-range values to
+    /// the supported window. Returns the resulting `DateTime` and a
+    /// boolean indicating whether clamping occurred.
+    pub fn from_system_time_clamped(t: SystemTime) -> (Self, bool) {
+        // Pre-1970 → clamp to ZERO.
+        let secs_since_epoch = match t.duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_secs() as i64,
+            Err(_) => return (Self::ZERO, true),
+        };
+        // 2034-01-01 00:00:00 UTC = 2 019 686 400 seconds since 1970.
+        // Anything ≥ that clamps to 2033-12-31 23:59:59.
+        const MAX_SECS: i64 = 2_019_686_400 - 1;
+        let (clamped, secs) = if secs_since_epoch > MAX_SECS {
+            (true, MAX_SECS)
+        } else {
+            (false, secs_since_epoch)
+        };
+
+        let days = (secs / 86_400) as i64;
+        let day_secs = (secs % 86_400) as u32;
+        let hour = (day_secs / 3600) as u8;
+        let minute = ((day_secs % 3600) / 60) as u8;
+        let second = (day_secs % 60) as u8;
+
+        let (year, month, day) = days_to_civil(days);
+        let dt = DateTime {
+            year: year as u16,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        };
+        (dt, clamped)
+    }
+
+    /// Convert this `DateTime` to a `SystemTime`. Always succeeds because
+    /// the supported range fits comfortably inside `SystemTime`'s
+    /// representable interval.
+    pub fn to_system_time(self) -> SystemTime {
+        let days = civil_to_days(self.year as i32, self.month, self.day);
+        let secs = (days as i64) * 86_400
+            + (self.hour as i64) * 3600
+            + (self.minute as i64) * 60
+            + (self.second as i64);
+        UNIX_EPOCH + Duration::from_secs(secs as u64)
+    }
+}
+
+/// Convert a civil date (year, month, day) to days since 1970-01-01.
+/// Hinnant's algorithm — handles all proleptic Gregorian dates without
+/// leap-year edge cases.
+fn civil_to_days(y: i32, m: u8, d: u8) -> i32 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u32;
+    let m = m as u32;
+    let d = d as u32;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe as i32 - 719468
+}
+
+/// Inverse of [`civil_to_days`]: convert days since 1970-01-01 back to
+/// (year, month, day).
+fn days_to_civil(z: i64) -> (i32, u8, u8) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i32 + era as i32 * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u8;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 impl Default for DateTime {
@@ -128,5 +209,75 @@ mod tests {
         assert!(DateTime::try_new(2026, 13, 1, 0, 0, 0).is_err());
         assert!(DateTime::try_new(2026, 1, 0, 0, 0, 0).is_err());
         assert!(DateTime::try_new(2026, 1, 1, 24, 0, 0).is_err());
+    }
+
+    #[test]
+    fn epoch_round_trip() {
+        let dt = DateTime::ZERO;
+        let st = dt.to_system_time();
+        assert_eq!(st, UNIX_EPOCH);
+        let (back, clamped) = DateTime::from_system_time_clamped(st);
+        assert!(!clamped);
+        assert_eq!(back, dt);
+    }
+
+    #[test]
+    fn known_instant_round_trip() {
+        // 2024-06-15 10:30:45 UTC = 1718447445 seconds since epoch.
+        let st = UNIX_EPOCH + Duration::from_secs(1_718_447_445);
+        let (dt, clamped) = DateTime::from_system_time_clamped(st);
+        assert!(!clamped);
+        assert_eq!(dt.year, 2024);
+        assert_eq!(dt.month, 6);
+        assert_eq!(dt.day, 15);
+        assert_eq!(dt.hour, 10);
+        assert_eq!(dt.minute, 30);
+        assert_eq!(dt.second, 45);
+        // Round-trip back.
+        let st2 = dt.to_system_time();
+        assert_eq!(st2, st);
+    }
+
+    #[test]
+    fn pre_1970_clamps_to_zero() {
+        // SystemTime before UNIX_EPOCH is represented by a Result::Err
+        // from duration_since.
+        let st = UNIX_EPOCH - Duration::from_secs(60);
+        let (dt, clamped) = DateTime::from_system_time_clamped(st);
+        assert!(clamped);
+        assert_eq!(dt, DateTime::ZERO);
+    }
+
+    #[test]
+    fn post_2033_clamps_to_max() {
+        // 2050-01-01 → must clamp.
+        let secs_2050 = 2_524_608_000u64;
+        let st = UNIX_EPOCH + Duration::from_secs(secs_2050);
+        let (dt, clamped) = DateTime::from_system_time_clamped(st);
+        assert!(clamped);
+        assert_eq!(dt.year, 2033);
+        assert_eq!(dt.month, 12);
+        assert_eq!(dt.day, 31);
+        assert_eq!(dt.hour, 23);
+        assert_eq!(dt.minute, 59);
+        assert_eq!(dt.second, 59);
+    }
+
+    #[test]
+    fn leap_year_day() {
+        // 2024-02-29 12:00:00 UTC.
+        let dt = DateTime::try_new(2024, 2, 29, 12, 0, 0).unwrap();
+        let st = dt.to_system_time();
+        let (back, _) = DateTime::from_system_time_clamped(st);
+        assert_eq!(back, dt);
+    }
+
+    #[test]
+    fn last_valid_lzx_instant_round_trips() {
+        let dt = DateTime::try_new(2033, 12, 31, 23, 59, 59).unwrap();
+        let st = dt.to_system_time();
+        let (back, clamped) = DateTime::from_system_time_clamped(st);
+        assert!(!clamped);
+        assert_eq!(back, dt);
     }
 }

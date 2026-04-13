@@ -125,6 +125,108 @@ fn multi_entry_archive() {
     assert!(reader.next_entry().unwrap().is_none());
 }
 
+/// Hand-craft a 2-entry merged group as raw bytes and verify the
+/// reader demultiplexes it correctly. Exercises the merged-group code
+/// path that the real Sembiance samples hit but isn't reachable through
+/// the encoder (which never emits merged groups).
+#[test]
+fn handcrafted_merged_group_round_trip() {
+    use lzx::block::BlockWriter;
+    use lzx::constants::{
+        ENTRY_HEADER_HOST_OS, ENTRY_HEADER_LEN, ENTRY_HEADER_MACHINE, ENTRY_HEADER_PACK_MODE,
+        INFO_HEADER_FLAGS, INFO_HEADER_LEN, INFO_HEADER_MAGIC, INFO_HEADER_VERSION, LEVEL_NORMAL,
+    };
+    use lzx::crc32::{crc32, Crc32};
+    use lzx::lz77;
+
+    // Two payloads we'll merge into one shared LZX stream.
+    let payload_a = b"This is the first file. It contains some text.";
+    let payload_b = b"And this is the second file with different content!";
+    let mut combined = Vec::new();
+    combined.extend_from_slice(payload_a);
+    combined.extend_from_slice(payload_b);
+
+    // Encode the combined stream as one LZX payload using our encoder.
+    let tokens = lz77::encode(&combined, &LEVEL_NORMAL);
+    let mut bw = BlockWriter::new(Vec::new());
+    bw.write_block(&tokens).unwrap();
+    let (compressed_payload, _) = bw.finish().unwrap();
+
+    // Build a 10-byte info header (mirroring the writer's layout).
+    let mut info = [0u8; INFO_HEADER_LEN];
+    info[0..4].copy_from_slice(&INFO_HEADER_MAGIC);
+    info[6] = INFO_HEADER_VERSION;
+    info[7] = INFO_HEADER_FLAGS;
+    let sum: u8 = info.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+    info[4] = sum;
+
+    // Helper to build one entry header. The first one carries
+    // compressed_size = 0 (interior of group), the second one carries
+    // the real size (the tail).
+    fn entry_header(
+        original_size: u32,
+        compressed_size: u32,
+        data_crc: u32,
+        filename: &str,
+    ) -> Vec<u8> {
+        let mut h = vec![0u8; ENTRY_HEADER_LEN + filename.len()];
+        h[0] = 0x07; // attrs (default)
+        h[2..6].copy_from_slice(&original_size.to_le_bytes());
+        h[6..10].copy_from_slice(&compressed_size.to_le_bytes());
+        h[10] = ENTRY_HEADER_MACHINE;
+        h[11] = ENTRY_HEADER_PACK_MODE;
+        h[12] = 1; // merged_flag
+        h[14] = 0; // comment_len
+        h[15] = ENTRY_HEADER_HOST_OS;
+        h[18..22].copy_from_slice(&[0, 0, 0, 0]); // datetime
+        h[22..26].copy_from_slice(&data_crc.to_le_bytes());
+        h[30] = filename.len() as u8;
+        h[ENTRY_HEADER_LEN..].copy_from_slice(filename.as_bytes());
+
+        // Compute header CRC: bytes 0..31 with 26..29 zeroed, then
+        // filename, then comment (empty here).
+        let mut crc = Crc32::new();
+        crc.update(&h[0..ENTRY_HEADER_LEN]); // bytes 26..29 are still zero
+        crc.update(filename.as_bytes());
+        let header_crc = crc.finalize();
+        h[26..30].copy_from_slice(&header_crc.to_le_bytes());
+        h
+    }
+
+    let crc_a = crc32(payload_a);
+    let crc_b = crc32(payload_b);
+
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&info);
+    archive.extend(entry_header(
+        payload_a.len() as u32,
+        0, // not the tail
+        crc_a,
+        "first.txt",
+    ));
+    archive.extend(entry_header(
+        payload_b.len() as u32,
+        compressed_payload.len() as u32, // tail carries shared payload
+        crc_b,
+        "second.txt",
+    ));
+    archive.extend_from_slice(&compressed_payload);
+
+    // Now read it back through ArchiveReader and verify both entries.
+    let mut reader = lzx::ArchiveReader::new(Cursor::new(&archive)).unwrap();
+    let e1 = reader.next_entry().unwrap().expect("first entry");
+    assert_eq!(e1.filename, "first.txt");
+    assert_eq!(e1.data, payload_a);
+    assert_eq!(e1.data_crc, crc_a);
+
+    let e2 = reader.next_entry().unwrap().expect("second entry");
+    assert_eq!(e2.filename, "second.txt");
+    assert_eq!(e2.data, payload_b);
+    assert_eq!(e2.data_crc, crc_b);
+
+    assert!(reader.next_entry().unwrap().is_none(), "expected EOF");
+}
+
 #[test]
 fn entry_with_comment() {
     let mut buf: Vec<u8> = Vec::new();

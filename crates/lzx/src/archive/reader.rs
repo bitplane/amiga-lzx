@@ -1,5 +1,18 @@
 //! Archive reader. Streams entries from a `Read` source.
+//!
+//! Handles three layouts:
+//!
+//! 1. **Single-entry** (`merged_flag = 0`) — one header + payload, normal.
+//! 2. **Stored single-entry** (`merged_flag = 0, pack_mode = 0`) — header
+//!    + raw payload bytes equal to `original_size`.
+//! 3. **Merged group** (consecutive entries with `merged_flag = 1`,
+//!    only the tail carrying `compressed_size > 0`) — one shared LZX
+//!    stream that decompresses to the concatenation of all entries'
+//!    `original_size` byte counts. Per-entry slices are demultiplexed
+//!    from the decoded byte stream and verified with each entry's own
+//!    CRC32 from its header.
 
+use std::collections::VecDeque;
 use std::io::Read;
 
 use crate::archive::{DateTime, EntryAttrs};
@@ -22,6 +35,24 @@ pub struct Entry {
 
 pub struct ArchiveReader<R: Read> {
     inner: R,
+    /// Pre-decoded entries waiting to be returned by `next_entry`. Filled
+    /// lazily by the merged-group path.
+    queue: VecDeque<Entry>,
+}
+
+/// Per-entry header metadata, parsed from the 31-byte fixed header plus
+/// the variable-length filename and comment bytes that follow it.
+#[derive(Debug)]
+struct EntryMeta {
+    attrs: EntryAttrs,
+    original_size: u32,
+    compressed_size: u32,
+    pack_mode: u8,
+    merged_flag: u8,
+    datetime: DateTime,
+    data_crc: u32,
+    filename: Vec<u8>,
+    comment: Vec<u8>,
 }
 
 impl<R: Read> ArchiveReader<R> {
@@ -35,12 +66,90 @@ impl<R: Read> ArchiveReader<R> {
         if &hdr[0..3] != b"LZX" {
             return Err(Error::InvalidArchive("not an LZX archive"));
         }
-        Ok(ArchiveReader { inner })
+        Ok(ArchiveReader {
+            inner,
+            queue: VecDeque::new(),
+        })
     }
 
     /// Read the next entry. Returns `Ok(None)` cleanly at end of archive.
     pub fn next_entry(&mut self) -> Result<Option<Entry>> {
-        // Try to read the 31-byte fixed header. EOF here = end of archive.
+        if let Some(buffered) = self.queue.pop_front() {
+            return Ok(Some(buffered));
+        }
+
+        let first = match self.read_entry_meta()? {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+
+        if first.merged_flag == 0 {
+            return self.decode_single_entry(first).map(Some);
+        }
+
+        // Merged group: collect entries until we hit one with
+        // `compressed_size > 0` (the tail carrying the shared payload).
+        let mut group = vec![first];
+        while group.last().unwrap().compressed_size == 0 {
+            let next = self
+                .read_entry_meta()?
+                .ok_or(Error::Truncated)?;
+            if next.merged_flag == 0 {
+                return Err(Error::InvalidArchive(
+                    "merged-group entry without merged_flag",
+                ));
+            }
+            group.push(next);
+        }
+
+        let tail_compressed = group.last().unwrap().compressed_size as usize;
+        let total_uncompressed: u64 =
+            group.iter().map(|m| m.original_size as u64).sum();
+
+        let mut payload = vec![0u8; tail_compressed];
+        self.inner
+            .read_exact(&mut payload)
+            .map_err(|_| Error::Truncated)?;
+
+        // Decode the entire merged stream as one continuous LZX payload.
+        // Block boundaries inside the stream don't align with file
+        // boundaries — the decoder produces one big buffer, we slice it.
+        let decoded = decoder::decode(&payload, total_uncompressed as usize)?;
+
+        let mut cursor = 0usize;
+        for meta in group {
+            let end = cursor + meta.original_size as usize;
+            if end > decoded.len() {
+                return Err(Error::InvalidArchive(
+                    "merged group entry slice runs past decoded length",
+                ));
+            }
+            let slice = decoded[cursor..end].to_vec();
+            cursor = end;
+            let computed = crc32(&slice);
+            if computed != meta.data_crc {
+                return Err(Error::CrcMismatch {
+                    expected: meta.data_crc,
+                    actual: computed,
+                });
+            }
+            self.queue.push_back(Entry {
+                filename: latin1_to_string(&meta.filename),
+                comment: latin1_to_string(&meta.comment),
+                attrs: meta.attrs,
+                datetime: meta.datetime,
+                data: slice,
+                data_crc: meta.data_crc,
+            });
+        }
+
+        Ok(self.queue.pop_front())
+    }
+
+    /// Read one entry's fixed header + filename + comment + verify the
+    /// header CRC. Returns `Ok(None)` on a clean EOF before any header
+    /// bytes are consumed (the natural end-of-archive case).
+    fn read_entry_meta(&mut self) -> Result<Option<EntryMeta>> {
         let mut fixed = [0u8; ENTRY_HEADER_LEN];
         match read_fully_or_eof(&mut self.inner, &mut fixed)? {
             0 => return Ok(None),
@@ -60,15 +169,6 @@ impl<R: Read> ArchiveReader<R> {
         let header_crc = u32::from_le_bytes(fixed[26..30].try_into().unwrap());
         let filename_len = fixed[30] as usize;
 
-        if merged_flag != 0 {
-            // We can read merged-group entries, but for v1 we don't fully
-            // support them — they require carrying decoder state across
-            // multiple entries. Surface a clear error.
-            return Err(Error::InvalidArchive(
-                "merged-group archives not yet supported",
-            ));
-        }
-
         let mut filename = vec![0u8; filename_len];
         self.inner
             .read_exact(&mut filename)
@@ -78,67 +178,92 @@ impl<R: Read> ArchiveReader<R> {
             .read_exact(&mut comment)
             .map_err(|_| Error::Truncated)?;
 
-        // Verify the header CRC.
+        // Verify the header CRC: bytes 0..31 with bytes 26..30 zeroed,
+        // followed by the filename bytes, followed by the comment bytes.
         let mut crc = Crc32::new();
         let mut hdr_for_crc = fixed;
         hdr_for_crc[26..30].fill(0);
         crc.update(&hdr_for_crc);
         crc.update(&filename);
         crc.update(&comment);
-        let computed_header_crc = crc.finalize();
-        if computed_header_crc != header_crc {
+        let computed = crc.finalize();
+        if computed != header_crc {
             return Err(Error::CrcMismatch {
                 expected: header_crc,
-                actual: computed_header_crc,
+                actual: computed,
             });
         }
 
-        // Read the compressed payload.
-        let mut payload = vec![0u8; compressed_size as usize];
+        Ok(Some(EntryMeta {
+            attrs,
+            original_size,
+            compressed_size,
+            pack_mode,
+            merged_flag,
+            datetime,
+            data_crc,
+            filename,
+            comment,
+        }))
+    }
+
+    /// Decode a non-merged entry. Reads `compressed_size` payload bytes,
+    /// dispatches on `pack_mode`, verifies the data CRC, and returns the
+    /// resulting `Entry`.
+    fn decode_single_entry(&mut self, meta: EntryMeta) -> Result<Entry> {
+        let mut payload = vec![0u8; meta.compressed_size as usize];
         self.inner
             .read_exact(&mut payload)
             .map_err(|_| Error::Truncated)?;
 
-        // Decode according to pack_mode (ALGORITHM.md §11; matches the
-        // dispatch in unlzx.c around line 945):
-        //   0 → stored (raw payload bytes)
+        // ALGORITHM.md §11 "Pack mode dispatch":
+        //   0 → stored (raw payload, length must equal original_size)
         //   2 → normal LZX-compressed
-        //   anything else → unknown, surface a clear error
-        let data = if original_size == 0 {
+        //   anything else → unknown
+        let data = if meta.original_size == 0 {
             Vec::new()
         } else {
-            match pack_mode {
+            match meta.pack_mode {
                 0 => {
-                    if payload.len() as u32 != original_size {
+                    if payload.len() as u32 != meta.original_size {
                         return Err(Error::InvalidArchive(
                             "stored entry size does not match payload length",
                         ));
                     }
-                    payload.clone()
+                    payload
                 }
-                2 => decoder::decode(&payload, original_size as usize)?,
-                _ => {
-                    return Err(Error::InvalidArchive("unknown pack mode"));
-                }
+                2 => decoder::decode(&payload, meta.original_size as usize)?,
+                _ => return Err(Error::InvalidArchive("unknown pack mode")),
             }
         };
-        let computed_data_crc = crc32(&data);
-        if computed_data_crc != data_crc {
+
+        let computed = crc32(&data);
+        if computed != meta.data_crc {
             return Err(Error::CrcMismatch {
-                expected: data_crc,
-                actual: computed_data_crc,
+                expected: meta.data_crc,
+                actual: computed,
             });
         }
 
-        Ok(Some(Entry {
-            filename: String::from_utf8_lossy(&filename).into_owned(),
-            comment: String::from_utf8_lossy(&comment).into_owned(),
-            attrs,
-            datetime,
+        Ok(Entry {
+            filename: latin1_to_string(&meta.filename),
+            comment: latin1_to_string(&meta.comment),
+            attrs: meta.attrs,
+            datetime: meta.datetime,
             data,
-            data_crc,
-        }))
+            data_crc: meta.data_crc,
+        })
     }
+}
+
+/// Lossless ISO-8859-1 → UTF-8 conversion. Amiga LZX filenames use
+/// Latin-1 (e.g. `0xa1` for `¡`); a naive `from_utf8_lossy` would
+/// substitute replacement characters and break round-trips on such
+/// names. Mapping each byte directly to a `char` in `0..=0xff`
+/// produces the corresponding Unicode codepoint, which `String`
+/// stores as UTF-8.
+fn latin1_to_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
 }
 
 fn read_fully_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<usize> {
