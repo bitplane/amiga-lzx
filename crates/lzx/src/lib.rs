@@ -3,6 +3,7 @@
 //! Based on reverse-engineered specs in `ALGORITHM.md` and `CONSTANTS.md`
 //! at the workspace root, cross-verified against `unlzx.c`.
 
+pub mod archive;
 pub mod bitio;
 pub mod block;
 pub mod constants;
@@ -13,5 +14,10 @@ pub mod hash;
 pub mod huffman;
 pub mod lz77;
 pub mod matcher;
+
+pub use crate::archive::{
+    ArchiveReader, ArchiveWriter, DateTime, Entry, EntryAttrs, EntryBuilder, EntryWriter,
+};
+pub use crate::archive::writer::Level;
 
 pub use crate::error::{Error, Result};

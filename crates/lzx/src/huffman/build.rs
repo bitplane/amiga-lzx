@@ -25,8 +25,18 @@ pub fn build_lengths(freqs: &[u32], max_len: u8) -> Vec<u8> {
         return lengths;
     }
     if m == 1 {
-        // Single symbol: assign length 1 so it gets a real code.
-        lengths[active[0].1 as usize] = 1;
+        // Single symbol: assign length 1 to it AND to one "phantom"
+        // unused symbol so the resulting tree's Kraft sum equals 1. The
+        // decoder requires a complete code; an isolated length-1 entry
+        // would be rejected as a malformed tree. The phantom is any other
+        // symbol — it will never appear in the encoded stream because
+        // the encoder only emits frequencies > 0.
+        let only = active[0].1 as usize;
+        lengths[only] = 1;
+        let phantom = if only == 0 { 1 } else { 0 };
+        if phantom < n {
+            lengths[phantom] = 1;
+        }
         return lengths;
     }
 
@@ -196,16 +206,20 @@ mod tests {
     }
 
     #[test]
-    fn single_symbol() {
+    fn single_symbol_gets_phantom_partner() {
+        // A single active symbol gets length 1, plus one phantom partner
+        // also at length 1 so the resulting tree is a complete prefix code
+        // (Kraft sum == 1). The phantom is never encoded.
         let mut freqs = [0u32; 8];
         freqs[3] = 99;
         let l = build_lengths(&freqs, 16);
         assert_eq!(l[3], 1);
-        for i in 0..8 {
-            if i != 3 {
-                assert_eq!(l[i], 0);
-            }
-        }
+        // Exactly one other symbol should be length 1 (the phantom).
+        let extras: Vec<usize> = (0..8).filter(|&i| i != 3 && l[i] == 1).collect();
+        assert_eq!(extras.len(), 1);
+        // Everything else stays 0.
+        let zeros = l.iter().filter(|&&x| x == 0).count();
+        assert_eq!(zeros, 6);
     }
 
     #[test]
