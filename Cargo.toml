@@ -12,7 +12,7 @@ repository = "https://github.com/bitplane/amiga-lzx"
 homepage = "https://bitplane.net/dev/rust/amiga-lzx"
 
 [workspace.dependencies]
-thiserror = "1"
+thiserror = "2"
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }
 proptest = "1"
