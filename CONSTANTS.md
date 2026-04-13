@@ -303,7 +303,7 @@ and the compressor's `write_file_header` / `mem_alloc_tiny`.
 | 2..5   | 4    | original size (LE) | from file entry word 0x1c (= byte 0x70) |
 | 6..9   | 4    | compressed size (LE) | from compressor; 0 if not last of multi-file group |
 | 10     | 1    | 0x0a           | hardcoded constant — machine type/version? |
-| 11     | 1    | 0x02           | pack mode (`DAT_001013f1 \| 2`, DAT is always 0) |
+| 11     | 1    | pack mode      | original Amiga compressor always writes `0x02` (`DAT_001013f1 \| 2`); **decoders must also handle `0x00` = stored** (raw payload). See ALGORITHM.md §11 "Pack mode dispatch". |
 | 12     | 1    | merged-flag    | 1 if multi-file group, 0 otherwise |
 | 13     | 1    | 0x00           | zeroed, never written |
 | 14     | 1    | comment length | from `mem_alloc_tiny` |

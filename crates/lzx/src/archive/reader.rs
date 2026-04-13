@@ -51,6 +51,7 @@ impl<R: Read> ArchiveReader<R> {
         let attrs = EntryAttrs::from_bits_retain(fixed[0]);
         let original_size = u32::from_le_bytes(fixed[2..6].try_into().unwrap());
         let compressed_size = u32::from_le_bytes(fixed[6..10].try_into().unwrap());
+        let pack_mode = fixed[11];
         let merged_flag = fixed[12];
         let comment_len = fixed[14] as usize;
         let date_bytes: [u8; 4] = fixed[18..22].try_into().unwrap();
@@ -98,11 +99,28 @@ impl<R: Read> ArchiveReader<R> {
             .read_exact(&mut payload)
             .map_err(|_| Error::Truncated)?;
 
-        // Decode and verify data CRC.
+        // Decode according to pack_mode (ALGORITHM.md §11; matches the
+        // dispatch in unlzx.c around line 945):
+        //   0 → stored (raw payload bytes)
+        //   2 → normal LZX-compressed
+        //   anything else → unknown, surface a clear error
         let data = if original_size == 0 {
             Vec::new()
         } else {
-            decoder::decode(&payload, original_size as usize)?
+            match pack_mode {
+                0 => {
+                    if payload.len() as u32 != original_size {
+                        return Err(Error::InvalidArchive(
+                            "stored entry size does not match payload length",
+                        ));
+                    }
+                    payload.clone()
+                }
+                2 => decoder::decode(&payload, original_size as usize)?,
+                _ => {
+                    return Err(Error::InvalidArchive("unknown pack mode"));
+                }
+            }
         };
         let computed_data_crc = crc32(&data);
         if computed_data_crc != data_crc {

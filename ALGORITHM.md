@@ -848,7 +848,7 @@ against `unlzx.c`:
 | 0x02..05  | 4    | **original size** (LE) | from file entry at offset 0x70 |
 | 0x06..09  | 4    | **compressed size** (LE) | from compressor, or 0 if not last-in-group |
 | 0x0a      | 1    | hardcoded `0x0a` | "machine type" / host version? Always 10 |
-| 0x0b      | 1    | **pack mode** flags | `DAT_001013f1 \| 2` → always `0x02` |
+| 0x0b      | 1    | **pack mode** | `DAT_001013f1 \| 2` → the original Amiga compressor always writes `0x02`, **but real archives in the wild also use `0x00` for stored entries** — see "Pack mode dispatch" below |
 | 0x0c      | 1    | merged-group flag | `1` if multi-file group, else `0` |
 | 0x0d      | 1    | 0 (unused) | zeroed, never overwritten |
 | 0x0e      | 1    | **comment length** | set by `mem_alloc_tiny` |
@@ -862,6 +862,53 @@ against `unlzx.c`:
 
 Total entry header on disk: `31 + filename_len + comment_len` bytes
 (from `entry_header_size` / `FUN_00002628`).
+
+### Pack mode dispatch (decoder side)
+
+The original LZX 1.21R compressor always writes `pack_mode = 0x02`, but
+the **format itself permits stored entries** and `unlzx.c` dispatches on
+byte `0x0b` (around line 945):
+
+```c
+switch(pack_mode) {
+    case 0:  extract_store(in_file);  break;  /* raw payload, no LZX */
+    case 2:  extract_normal(in_file); break;  /* LZX-compressed */
+    default: extract_unknown(in_file); break;
+}
+```
+
+A conformant decoder **must** handle at least the two known values:
+
+| `pack_mode` | Meaning | Payload layout |
+|-------------|---------|----------------|
+| `0x00`      | **stored** | `compressed_size` bytes of raw payload, equal to `original_size` |
+| `0x02`      | **normal** | LZX-compressed stream, decompresses to `original_size` bytes |
+| other       | unknown | Treat as a hard error or skip via `compressed_size` |
+
+Real-world Aminet samples that use `pack_mode = 0`:
+- Small `file_id.diz` and similar manifests stored alongside compressed
+  data in the same archive
+- Tiny entries (≤ 17 bytes in some samples) where compression would
+  cost more than it saves
+- Mixed-mode archives where some files are pre-compressed (e.g. ZIP/JPEG)
+  and the LZX writer chose to store them rather than re-compress
+
+If `pack_size == 0` the entry has no payload at all (this happens for
+non-last members of a merged group — see "Multi-file groups" below).
+Skip straight to the next entry header.
+
+After processing each entry, `unlzx` defensively `fseek`s `pack_size`
+bytes from the entry's payload start so a partial extractor read can't
+desynchronise the stream:
+
+```c
+if(fseek(in_file, pack_size, SEEK_CUR)) { ... }
+```
+
+A from-scratch reader should do the same: track the position where the
+payload begins, and after attempting to decode it, advance to
+`payload_start + compressed_size` regardless of how many bytes the
+extractor actually consumed.
 
 Header CRC computation:
 1. `header_crc = 0xFFFFFFFF`
