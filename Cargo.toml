@@ -8,7 +8,8 @@ edition = "2021"
 rust-version = "1.75"
 license = "WTFPL"
 authors = ["Gareth Davidson <gaz@bitplane.net>"]
-repository = "https://github.com/bitplane/lzx"
+repository = "https://github.com/bitplane/amiga-lzx"
+homepage = "https://bitplane.net/dev/rust/amiga-lzx"
 
 [workspace.dependencies]
 thiserror = "1"

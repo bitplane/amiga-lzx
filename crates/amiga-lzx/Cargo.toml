@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Pure-Rust compressor and decompressor for the Amiga LZX archive format"
+readme = "README.md"
 keywords = ["amiga", "lzx", "compression", "archive", "lz77"]
 categories = ["compression"]
 
