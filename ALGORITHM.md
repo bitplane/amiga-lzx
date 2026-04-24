@@ -854,7 +854,7 @@ against `unlzx.c`:
 | 0x0e      | 1    | **comment length** | set by `mem_alloc_tiny` |
 | 0x0f      | 1    | hardcoded `0x0a` | "extract version" / host OS? Always 10 |
 | 0x10..11  | 2    | 0 (unused) | zeroed, never overwritten |
-| 0x12..15  | 4    | **packed date/time** | 4 bytes of packed year-1970 / month / day / hour / minute / second, via `FUN_000070d8` bit-packing |
+| 0x12..15  | 4    | **packed date/time** | 4 bytes of packed day / month / year / hour / minute / second, via `FUN_000070d8` bit-packing; see §11 "Packed date/time" below. **Year is a 4-segment piecewise mapping**, not a single `+1970` offset; **month is 0-based** (0 = January). |
 | 0x16..19  | 4    | **data CRC32** (LE) | from file entry word 2; computed during compression |
 | 0x1a..1d  | 4    | **header CRC32** (LE) | computed last with these 4 bytes zeroed |
 | 0x1e      | 1    | **filename length** | set by `mem_alloc_tiny` |
@@ -919,42 +919,47 @@ Header CRC computation:
 
 ### Packed date/time at bytes 0x12..0x15
 
-Format (from `pack_date`, inverse `unpack_date`). **Verified by bit-level
-analysis**: the input-struct field order is `{year-1970, day, month, hour,
-minute, second}` — note **day comes before month**, unlike MS-DOS:
+4 bytes, **big-endian**, packed as a 32-bit word (high → low):
 
-```c
-void pack_date(const unsigned char in[6], uint8_t out[4]) {
-    // in[0]=year-1970, in[1]=day, in[2]=month,
-    // in[3]=hour,       in[4]=minute, in[5]=second
-    out[0] = (in[2] >> 1) | (in[1] << 3);
-    out[1] = (in[3] >> 4) | (in[0] << 1) | (in[2] << 7);
-    out[2] = (in[4] >> 2) | (in[3] << 4);
-    out[3] =  in[5]       | (in[4] << 6);
-}
+```
+bits 31..27  day       (5 bits, 1..=31)
+bits 26..23  month-1   (4 bits, 0..=11; 0 = January)
+bits 22..17  year_fld  (6 bits, piecewise mapping — see table)
+bits 16..12  hour      (5 bits, 0..=23)
+bits 11..6   minute    (6 bits, 0..=59)
+bits  5..0   second    (6 bits, 0..=59)
 ```
 
-Bit field widths: **year=6, day=5, month=4, hour=5, minute=6, second=6**
-(total 32 bits).
+Total 32 bits. Bit field widths: day=5, month=4, year=6, hour=5,
+minute=6, second=6. This is **NOT** MS-DOS / FAT format — the field
+ordering differs (MS-DOS packs hour/min/sec + year/month/day, and uses
+a 1980 epoch).
 
-Byte layout (MSB..LSB within each byte):
-```
-byte 0: [ day(5 bits)    | month(high 3 bits)     ]
-byte 1: [ month(bit 0)   | year-1970(6 bits)      | hour(bit 4)    ]
-byte 2: [ hour(low 4)    | minute(high 4 bits)    ]
-byte 3: [ minute(low 2)  | second(6 bits)         ]
-```
+**The 6-bit year field is piecewise**, not a single offset. Ground
+truth is `Test_LZX.lzx` inside
+<http://aminet.net/util/arc/LZX_Y2Kfix.lha>, which has 22 entries named
+after the year they're dated:
 
-Packed bit stream (high-to-low across the 4 bytes): `day | month | year |
-hour | minute | second`.
+| field value | year range   | offset |
+|-------------|--------------|--------|
+|  8..29      | 1978..=1999  | +1970  |
+| 58..63      | 2000..=2005  | +1942  |
+| 30..57      | 2006..=2033  | +1976  |
+|  0..7       | 2034..=2041  | +2034  |
 
-This is **NOT** MS-DOS / FAT format — the field ordering differs (MS-DOS
-packs hour/min/sec + year/month/day, and uses a 1980 epoch). This is
-LZX's own scheme with a 1970 epoch (year adjustment is `-0x46 = -70`,
-verified at decompiled line 6578).
+The Aminet `unlzx.c` and un-patched LZX 1.21R1's display routines just
+apply `year_fld + 1970` across the board, which silently mis-decodes
+anything outside the 1978..=1999 segment — so a 2026 archive displays
+as 2020, a 2008 archive as 1984, etc. The dr.Titus / Mikolaj
+Calusinski "Y2K fix" patches the decoder; the on-disk encoding was
+always this shape.
 
-**Previous doc had `day ↔ month` swapped**; corrected after bit-level
-re-derivation from `pack_date` + `unpack_date`.
+**Month is 0-based on disk** (bits 26..23 hold `month - 1`); the
+Aminet `unlzx` output "apr" for bit pattern `0011` was our first clue.
+
+**Previous doc here claimed a single `-1970` year offset and a 1-based
+month**, both wrong; corrected after decoding
+<http://aminet.net/util/arc/LZX_Y2Kfix.lha>'s `Test_LZX.lzx`.
 
 ### Notes on the "unused" bytes
 
@@ -1047,13 +1052,15 @@ the highest-order bits: day, month-high).
 
 Bit field unpacking (after BE-combining the 4 bytes into a 32-bit word):
 ```
-day    = (temp >> 27) & 31    // bits 27..31
-month  = (temp >> 23) & 15    // bits 23..26
-year   = (temp >> 17) & 63    // bits 17..22   (+ 1970)
-hour   = (temp >> 12) & 31    // bits 12..16
-minute = (temp >>  6) & 63    // bits  6..11
-second =  temp        & 63    // bits  0..5
+day       = (temp >> 27) & 31    // bits 27..31
+month     = (temp >> 23) & 15    // bits 23..26  (0-based; add 1 for display)
+year_fld  = (temp >> 17) & 63    // bits 17..22  (piecewise — see §11 table)
+hour      = (temp >> 12) & 31    // bits 12..16
+minute    = (temp >>  6) & 63    // bits  6..11
+second    =  temp        & 63    // bits  0..5
 ```
+
+Year field is **not** a simple `+1970`; use the table in §11.
 
 ---
 

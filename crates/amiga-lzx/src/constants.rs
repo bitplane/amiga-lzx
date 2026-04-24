@@ -165,8 +165,6 @@ pub const ENTRY_HEADER_MACHINE: u8 = 0x0a;
 pub const ENTRY_HEADER_HOST_OS: u8 = 0x0a;
 pub const ENTRY_HEADER_PACK_MODE: u8 = 0x02;
 
-pub const DATE_EPOCH_YEAR: u16 = 1970;
-
 // --- CRC32 (zlib) ---------------------------------------------------------
 
 pub const CRC32_POLY: u32 = 0xedb88320;

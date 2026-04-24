@@ -1,15 +1,29 @@
-//! LZX-specific date/time packing (1970 epoch, big-endian bit-packed).
-//!
-//! See ALGORITHM.md §11 "Packed date/time byte order". Layout:
+//! LZX-specific date/time packing — 4 bytes, big-endian bit-packed.
 //!
 //! ```text
-//! bits 31..27  day    (5 bits)
-//! bits 26..23  month  (4 bits)
-//! bits 22..17  year   (6 bits, + 1970)
-//! bits 16..12  hour   (5 bits)
-//! bits 11..6   minute (6 bits)
-//! bits  5..0   second (6 bits)
+//! bits 31..27  day      (5 bits, 1..=31)
+//! bits 26..23  month-1  (4 bits, 0..=11, i.e. 0 = January)
+//! bits 22..17  year_fld (6 bits, see table)
+//! bits 16..12  hour     (5 bits, 0..=23)
+//! bits 11..6   minute   (6 bits, 0..=59)
+//! bits  5..0   second   (6 bits, 0..=59)
 //! ```
+//!
+//! The 6-bit year field is a **piecewise** mapping, not a single offset
+//! — this is the real on-disk layout used by the original Amiga LZX,
+//! verified against `Test_LZX.lzx` from the dr.Titus Y2K-fix package:
+//!
+//! | field  | year range   | offset |
+//! |--------|--------------|--------|
+//! |  8..29 | 1978..=1999  | +1970  |
+//! | 58..63 | 2000..=2005  | +1942  |
+//! | 30..57 | 2006..=2033  | +1976  |
+//! |  0..7  | 2034..=2041  | +2034  |
+//!
+//! Old unlzx versions (and the un-fixed LZX 1.21R1) just apply
+//! `field + 1970` across the board, which silently mis-decodes anything
+//! outside the 1978..=1999 segment. The Y2K "fix" is a decoder change
+//! — the encoding was always this shape.
 //!
 //! Stored in 4 bytes **big-endian**, unlike the rest of the entry header.
 
@@ -19,8 +33,8 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateTime {
-    pub year: u16,  // absolute year, 1970..=2033
-    pub month: u8,  // 1..=12
+    pub year: u16,  // absolute year, 1978..=2041
+    pub month: u8,  // 1..=12 (1-based in the struct; stored 0-based on disk)
     pub day: u8,    // 1..=31
     pub hour: u8,   // 0..=23
     pub minute: u8, // 0..=59
@@ -28,11 +42,14 @@ pub struct DateTime {
 }
 
 impl DateTime {
-    pub const EPOCH: u16 = 1970;
+    pub const MIN_YEAR: u16 = 1978;
+    pub const MAX_YEAR: u16 = 2041;
 
-    /// Sentinel "epoch zero" for tests and stub fields.
+    /// Lowest representable instant: 1978-01-01 00:00:00. Used as the
+    /// default when no mtime is available and as the pre-range clamp
+    /// target.
     pub const ZERO: DateTime = DateTime {
-        year: 1970,
+        year: 1978,
         month: 1,
         day: 1,
         hour: 0,
@@ -61,8 +78,8 @@ impl DateTime {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.year < Self::EPOCH || self.year > Self::EPOCH + 63 {
-            return Err(Error::DateOutOfRange("year must be 1970..=2033"));
+        if self.year < Self::MIN_YEAR || self.year > Self::MAX_YEAR {
+            return Err(Error::DateOutOfRange("year must be 1978..=2041"));
         }
         if !(1..=12).contains(&self.month) {
             return Err(Error::DateOutOfRange("month must be 1..=12"));
@@ -83,9 +100,17 @@ impl DateTime {
     }
 
     pub fn pack(self) -> [u8; 4] {
+        let year_fld: u32 = match self.year {
+            1978..=1999 => (self.year - 1970) as u32,
+            2000..=2005 => (self.year - 1942) as u32,
+            2006..=2033 => (self.year - 1976) as u32,
+            2034..=2041 => (self.year - 2034) as u32,
+            _ => 0, // validated range; unreachable in practice
+        };
+        let month_on_disk = (self.month as u32).saturating_sub(1) & 0x0F;
         let temp = ((self.day as u32) << 27)
-            | ((self.month as u32) << 23)
-            | (((self.year - Self::EPOCH) as u32) << 17)
+            | (month_on_disk << 23)
+            | (year_fld << 17)
             | ((self.hour as u32) << 12)
             | ((self.minute as u32) << 6)
             | (self.second as u32);
@@ -94,10 +119,17 @@ impl DateTime {
 
     pub fn unpack(bytes: [u8; 4]) -> Self {
         let temp = u32::from_be_bytes(bytes);
+        let year_fld = ((temp >> 17) & 63) as u16;
+        let year = match year_fld {
+            0..=7 => year_fld + 2034,
+            8..=29 => year_fld + 1970,
+            30..=57 => year_fld + 1976,
+            _ => year_fld + 1942, // 58..=63
+        };
         DateTime {
             day: ((temp >> 27) & 31) as u8,
-            month: ((temp >> 23) & 15) as u8,
-            year: (((temp >> 17) & 63) as u16) + Self::EPOCH,
+            month: (((temp >> 23) & 15) + 1) as u8,
+            year,
             hour: ((temp >> 12) & 31) as u8,
             minute: ((temp >> 6) & 63) as u8,
             second: (temp & 63) as u8,
@@ -106,17 +138,22 @@ impl DateTime {
 
     /// Convert a `SystemTime` (interpreted as seconds since the Unix
     /// epoch) into an LZX `DateTime`, clamping out-of-range values to
-    /// the supported window. Returns the resulting `DateTime` and a
-    /// boolean indicating whether clamping occurred.
+    /// the supported 1978..=2041 window. Returns the resulting
+    /// `DateTime` and a boolean indicating whether clamping occurred.
     pub fn from_system_time_clamped(t: SystemTime) -> (Self, bool) {
-        // Pre-1970 → clamp to ZERO.
+        // 1978-01-01 00:00:00 UTC and 2042-01-01 00:00:00 UTC in
+        // seconds since the Unix epoch. Using `civil_to_days` here
+        // would work too, but these are constants so we inline them.
+        const MIN_SECS: i64 = 252_460_800; // 1978-01-01
+        const MAX_SECS: i64 = 2_272_147_200 - 1; // 2041-12-31 23:59:59
+
         let secs_since_epoch = match t.duration_since(UNIX_EPOCH) {
             Ok(d) => d.as_secs() as i64,
             Err(_) => return (Self::ZERO, true),
         };
-        // 2034-01-01 00:00:00 UTC = 2 019 686 400 seconds since 1970.
-        // Anything ≥ that clamps to 2033-12-31 23:59:59.
-        const MAX_SECS: i64 = 2_019_686_400 - 1;
+        if secs_since_epoch < MIN_SECS {
+            return (Self::ZERO, true);
+        }
         let (clamped, secs) = if secs_since_epoch > MAX_SECS {
             (true, MAX_SECS)
         } else {
@@ -201,31 +238,37 @@ mod tests {
             DateTime::try_new(2026, 4, 13, 3, 47, 22).unwrap(),
             DateTime::try_new(1999, 12, 31, 23, 59, 59).unwrap(),
             DateTime::try_new(2033, 12, 31, 23, 59, 59).unwrap(),
+            DateTime::try_new(2041, 12, 31, 23, 59, 59).unwrap(),
+            // One from each of the four year-encoding segments.
+            DateTime::try_new(1978, 1, 1, 0, 0, 0).unwrap(),
+            DateTime::try_new(2003, 7, 4, 12, 34, 56).unwrap(),
+            DateTime::try_new(2020, 4, 19, 11, 33, 0).unwrap(),
+            DateTime::try_new(2040, 6, 15, 18, 0, 0).unwrap(),
         ];
         for c in cases {
             let bytes = c.pack();
             let back = DateTime::unpack(bytes);
-            assert_eq!(back, c);
+            assert_eq!(back, c, "round-trip failed for {c:?} -> {bytes:02x?}");
         }
     }
 
     #[test]
     fn rejects_out_of_range() {
-        assert!(DateTime::try_new(1969, 1, 1, 0, 0, 0).is_err());
-        assert!(DateTime::try_new(2034, 1, 1, 0, 0, 0).is_err());
+        assert!(DateTime::try_new(1977, 1, 1, 0, 0, 0).is_err());
+        assert!(DateTime::try_new(2042, 1, 1, 0, 0, 0).is_err());
         assert!(DateTime::try_new(2026, 13, 1, 0, 0, 0).is_err());
         assert!(DateTime::try_new(2026, 1, 0, 0, 0, 0).is_err());
         assert!(DateTime::try_new(2026, 1, 1, 24, 0, 0).is_err());
     }
 
     #[test]
-    fn epoch_round_trip() {
-        let dt = DateTime::ZERO;
-        let st = dt.to_system_time();
-        assert_eq!(st, UNIX_EPOCH);
-        let (back, clamped) = DateTime::from_system_time_clamped(st);
-        assert!(!clamped);
-        assert_eq!(back, dt);
+    fn y2k_fix_sample_decodes_to_2026() {
+        // date.lzx from issue #5 — real archive made on 2026-04-19.
+        let bytes = [0x99, 0xe4, 0xb8, 0x40];
+        let dt = DateTime::unpack(bytes);
+        assert_eq!(dt.year, 2026);
+        assert_eq!(dt.month, 4);
+        assert_eq!(dt.day, 19);
     }
 
     #[test]
@@ -240,29 +283,32 @@ mod tests {
         assert_eq!(dt.hour, 10);
         assert_eq!(dt.minute, 30);
         assert_eq!(dt.second, 45);
-        // Round-trip back.
         let st2 = dt.to_system_time();
         assert_eq!(st2, st);
     }
 
     #[test]
-    fn pre_1970_clamps_to_zero() {
-        // SystemTime before UNIX_EPOCH is represented by a Result::Err
-        // from duration_since.
-        let st = UNIX_EPOCH - Duration::from_secs(60);
-        let (dt, clamped) = DateTime::from_system_time_clamped(st);
+    fn pre_1978_clamps_to_zero() {
+        // Unix epoch itself is before the LZX minimum (1978) — clamp.
+        let (dt, clamped) = DateTime::from_system_time_clamped(UNIX_EPOCH);
+        assert!(clamped);
+        assert_eq!(dt, DateTime::ZERO);
+
+        // And anything before UNIX_EPOCH clamps the same way.
+        let pre = UNIX_EPOCH - Duration::from_secs(60);
+        let (dt, clamped) = DateTime::from_system_time_clamped(pre);
         assert!(clamped);
         assert_eq!(dt, DateTime::ZERO);
     }
 
     #[test]
-    fn post_2033_clamps_to_max() {
+    fn post_2041_clamps_to_max() {
         // 2050-01-01 → must clamp.
         let secs_2050 = 2_524_608_000u64;
         let st = UNIX_EPOCH + Duration::from_secs(secs_2050);
         let (dt, clamped) = DateTime::from_system_time_clamped(st);
         assert!(clamped);
-        assert_eq!(dt.year, 2033);
+        assert_eq!(dt.year, 2041);
         assert_eq!(dt.month, 12);
         assert_eq!(dt.day, 31);
         assert_eq!(dt.hour, 23);
@@ -272,7 +318,6 @@ mod tests {
 
     #[test]
     fn leap_year_day() {
-        // 2024-02-29 12:00:00 UTC.
         let dt = DateTime::try_new(2024, 2, 29, 12, 0, 0).unwrap();
         let st = dt.to_system_time();
         let (back, _) = DateTime::from_system_time_clamped(st);
@@ -281,7 +326,7 @@ mod tests {
 
     #[test]
     fn last_valid_lzx_instant_round_trips() {
-        let dt = DateTime::try_new(2033, 12, 31, 23, 59, 59).unwrap();
+        let dt = DateTime::try_new(2041, 12, 31, 23, 59, 59).unwrap();
         let st = dt.to_system_time();
         let (back, clamped) = DateTime::from_system_time_clamped(st);
         assert!(!clamped);

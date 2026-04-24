@@ -173,7 +173,7 @@ fn handcrafted_merged_group_round_trip() {
         filename: &str,
     ) -> Vec<u8> {
         let mut h = vec![0u8; ENTRY_HEADER_LEN + filename.len()];
-        h[0] = 0x07; // attrs (default)
+        h[0] = 0x07; // attrs — arbitrary nonzero value
         h[2..6].copy_from_slice(&original_size.to_le_bytes());
         h[6..10].copy_from_slice(&compressed_size.to_le_bytes());
         h[10] = ENTRY_HEADER_MACHINE;

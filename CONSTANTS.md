@@ -309,7 +309,7 @@ and the compressor's `write_file_header` / `mem_alloc_tiny`.
 | 14     | 1    | comment length | from `mem_alloc_tiny` |
 | 15     | 1    | 0x0a           | hardcoded constant — host OS/version? |
 | 16, 17 | 2    | 0x00 0x00      | zeroed, never written |
-| 18..21 | 4    | packed date/time | 4 bytes packed year/month/day/hour/minute/second (1970 epoch, via FUN_000070d8) |
+| 18..21 | 4    | packed date/time | 4 bytes packed day/month/year/hour/minute/second (via FUN_000070d8). **Year is a 4-segment piecewise mapping** covering 1978..=2041, **not** a single 1970-offset. **Month is 0-based** (0 = January). See ALGORITHM.md §11 for the full year table. |
 | 22..25 | 4    | data CRC32 (LE)| from file entry word 2; set during compression |
 | 26..29 | 4    | header CRC32 (LE) | computed last, with bytes 26..29 set to 0 |
 | 30     | 1    | filename length | from `mem_alloc_tiny` |
