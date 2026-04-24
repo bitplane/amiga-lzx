@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "amiga-lzx"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bitflags",
  "proptest",
@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "amiga-lzx-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "amiga-lzx",
  "clap",

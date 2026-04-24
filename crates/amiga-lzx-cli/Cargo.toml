@@ -18,7 +18,7 @@ name = "lzx"
 path = "src/main.rs"
 
 [dependencies]
-amiga-lzx = { path = "../amiga-lzx", version = "0.1.0" }
+amiga-lzx = { path = "../amiga-lzx", version = "0.1.2" }
 clap.workspace = true
 
 [dev-dependencies]
