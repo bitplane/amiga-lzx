@@ -298,7 +298,7 @@ and the compressor's `write_file_header` / `mem_alloc_tiny`.
 
 | Offset | Size | Value | Notes |
 |--------|------|-------|-------|
-| 0      | 1    | attribute byte | HSPARWED bits or default 0x07 |
+| 0      | 1    | attribute byte | PSHAEDWR bits; `0x0f` (`----rwed`) for a freshly-created Amiga file |
 | 1      | 1    | 0x00          | zeroed, never written |
 | 2..5   | 4    | original size (LE) | from file entry word 0x1c (= byte 0x70) |
 | 6..9   | 4    | compressed size (LE) | from compressor; 0 if not last of multi-file group |

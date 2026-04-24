@@ -19,9 +19,10 @@ bitflags! {
 }
 
 impl Default for EntryAttrs {
-    /// Matches `entry_attr_default = 0x07` from the Amiga compressor —
-    /// READ | WRITE | EXECUTE.
+    /// Raw byte `0x0f` — what AmigaDOS shows as `----rwed` for a file
+    /// with untouched protection bits, matching the `default` entry in
+    /// sonnenscheinchen's `bits.lzx` reference archive.
     fn default() -> Self {
-        EntryAttrs::READ | EntryAttrs::WRITE | EntryAttrs::EXECUTE
+        EntryAttrs::READ | EntryAttrs::WRITE | EntryAttrs::EXECUTE | EntryAttrs::DELETE
     }
 }

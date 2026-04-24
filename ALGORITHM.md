@@ -843,7 +843,7 @@ against `unlzx.c`:
 
 | Offset    | Size | Field | Source |
 |-----------|------|-------|--------|
-| 0x00      | 1    | attributes (HSPARWED) | `entry_attr_default` (=0x07) or `entry_attr_byte` |
+| 0x00      | 1    | attributes (PSHAEDWR) | `entry_attr_byte` — `0x0f` (`----rwed`) for a freshly-created Amiga file; see `bits.lzx` in issue #3 for the full bit layout. The Ghidra symbol `entry_attr_default = 0x07` exists in the binary but doesn't match what the compressor actually writes for default files. |
 | 0x01      | 1    | 0 (unused) | zeroed by `mem_alloc_tiny`, never overwritten |
 | 0x02..05  | 4    | **original size** (LE) | from file entry at offset 0x70 |
 | 0x06..09  | 4    | **compressed size** (LE) | from compressor, or 0 if not last-in-group |
