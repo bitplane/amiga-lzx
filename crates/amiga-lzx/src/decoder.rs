@@ -186,6 +186,11 @@ impl<R: Read> Decoder<R> {
                 if length as u32 > self.block_remaining {
                     return Err(Error::InvalidArchive("match runs past block end"));
                 }
+                if out.len() + length > target {
+                    return Err(Error::InvalidArchive(
+                        "decoded data exceeds expected length",
+                    ));
+                }
 
                 // Copy `length` bytes from `dist` behind window_pos.
                 for _ in 0..length {
@@ -295,5 +300,20 @@ mod tests {
     fn all_byte_values_present() {
         let data: Vec<u8> = (0..=255u8).cycle().take(2000).collect();
         round_trip(&data);
+    }
+
+    #[test]
+    fn match_that_exceeds_expected_size_is_rejected() {
+        let input = vec![0u8; 100];
+        let tokens = lz77_encode(&input, &LEVEL_NORMAL);
+        let mut bw = BlockWriter::new(Vec::new());
+        bw.write_block(&tokens).unwrap();
+        let (bytes, _) = bw.finish().unwrap();
+
+        let err = decode(&bytes, 10).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidArchive("decoded data exceeds expected length")
+        ));
     }
 }

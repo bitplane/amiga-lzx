@@ -6,7 +6,7 @@
 
 use std::io::{Cursor, Write};
 
-use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryAttrs, EntryBuilder, Level};
+use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryAttrs, EntryBuilder, Error, Level};
 
 fn round_trip(name: &str, payload: &[u8], level: Level) {
     let buf: Vec<u8> = Vec::new();
@@ -247,4 +247,44 @@ fn entry_with_comment() {
     assert_eq!(entry.filename, "file.txt");
     assert_eq!(entry.comment, "a small note");
     assert_eq!(entry.data, b"payload");
+}
+
+#[test]
+fn latin1_filename_and_comment_round_trip() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut ar = ArchiveWriter::new(Cursor::new(&mut buf)).unwrap();
+        let mut e = ar
+            .add_entry(EntryBuilder::new("¡tsa!.txt").comment("olá"))
+            .unwrap();
+        e.write_all(b"payload").unwrap();
+        e.finish().unwrap();
+        ar.finish().unwrap();
+    }
+
+    let mut reader = ArchiveReader::new(Cursor::new(&buf)).unwrap();
+    let entry = reader.next_entry().unwrap().unwrap();
+    assert_eq!(entry.filename, "¡tsa!.txt");
+    assert_eq!(entry.comment, "olá");
+    assert_eq!(entry.data, b"payload");
+}
+
+#[test]
+fn non_latin1_filename_is_rejected() {
+    let mut ar = ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
+    match ar.add_entry(EntryBuilder::new("snowman-☃.txt")) {
+        Err(Error::FilenameNotLatin1) => {}
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("expected non-Latin-1 filename to be rejected"),
+    };
+}
+
+#[test]
+fn non_latin1_comment_is_rejected() {
+    let mut ar = ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
+    match ar.add_entry(EntryBuilder::new("file.txt").comment("snowman-☃")) {
+        Err(Error::CommentNotLatin1) => {}
+        Err(other) => panic!("unexpected error: {other:?}"),
+        Ok(_) => panic!("expected non-Latin-1 comment to be rejected"),
+    };
 }

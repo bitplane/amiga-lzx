@@ -11,6 +11,12 @@ pub enum Error {
     #[error("comment too long: {0} bytes (max 255)")]
     CommentTooLong(usize),
 
+    #[error("filename contains characters outside ISO-8859-1")]
+    FilenameNotLatin1,
+
+    #[error("comment contains characters outside ISO-8859-1")]
+    CommentNotLatin1,
+
     #[error("date out of range: {0}")]
     DateOutOfRange(&'static str),
 

@@ -45,8 +45,10 @@ impl<W: Write + Seek> ArchiveWriter<W> {
     /// Begin a new entry. Returns a sink that you write the uncompressed
     /// bytes into; call [`EntryWriter::finish`] when done.
     pub fn add_entry(&mut self, builder: EntryBuilder) -> Result<EntryWriter<'_, W>> {
-        let fname_len = builder.filename.len();
-        let cmt_len = builder.comment.len();
+        let filename = string_to_latin1(&builder.filename).ok_or(Error::FilenameNotLatin1)?;
+        let comment = string_to_latin1(&builder.comment).ok_or(Error::CommentNotLatin1)?;
+        let fname_len = filename.len();
+        let cmt_len = comment.len();
         if fname_len > 255 {
             return Err(Error::FilenameTooLong(fname_len));
         }
@@ -64,6 +66,8 @@ impl<W: Write + Seek> ArchiveWriter<W> {
         Ok(EntryWriter {
             archive: self,
             builder,
+            filename,
+            comment,
             header_pos,
             uncompressed: Vec::new(),
             finished: false,
@@ -145,6 +149,8 @@ impl EntryBuilder {
 pub struct EntryWriter<'a, W: Write + Seek> {
     archive: &'a mut ArchiveWriter<W>,
     builder: EntryBuilder,
+    filename: Vec<u8>,
+    comment: Vec<u8>,
     header_pos: u64,
     uncompressed: Vec<u8>,
     finished: bool,
@@ -186,8 +192,8 @@ impl<'a, W: Write + Seek> EntryWriter<'a, W> {
         let end_pos = self.archive.inner_mut().stream_position()?;
 
         // Build the final fixed header.
-        let fname_len = self.builder.filename.len();
-        let cmt_len = self.builder.comment.len();
+        let fname_len = self.filename.len();
+        let cmt_len = self.comment.len();
         let total = ENTRY_HEADER_LEN + fname_len + cmt_len;
         let mut header = vec![0u8; total];
         header[0] = self.builder.attrs.bits();
@@ -202,10 +208,9 @@ impl<'a, W: Write + Seek> EntryWriter<'a, W> {
         header[22..26].copy_from_slice(&data_crc.to_le_bytes());
         // header[26..30] = header CRC, computed with these bytes zeroed.
         header[30] = fname_len as u8;
-        header[ENTRY_HEADER_LEN..ENTRY_HEADER_LEN + fname_len]
-            .copy_from_slice(self.builder.filename.as_bytes());
+        header[ENTRY_HEADER_LEN..ENTRY_HEADER_LEN + fname_len].copy_from_slice(&self.filename);
         let cmt_off = ENTRY_HEADER_LEN + fname_len;
-        header[cmt_off..cmt_off + cmt_len].copy_from_slice(self.builder.comment.as_bytes());
+        header[cmt_off..cmt_off + cmt_len].copy_from_slice(&self.comment);
 
         // Compute and write the header CRC.
         let mut crc = Crc32::new();
@@ -231,4 +236,16 @@ impl<'a, W: Write + Seek> Drop for EntryWriter<'a, W> {
             "EntryWriter dropped without calling finish() — header will be unpatched"
         );
     }
+}
+
+fn string_to_latin1(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len());
+    for ch in s.chars() {
+        let code = ch as u32;
+        if code > 0xff {
+            return None;
+        }
+        out.push(code as u8);
+    }
+    Some(out)
 }

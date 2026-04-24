@@ -1,6 +1,6 @@
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryBuilder, Level};
@@ -91,6 +91,12 @@ fn create(archive: &Path, roots: &[PathBuf], level: Level) -> io::Result<()> {
             "no regular files found",
         ));
     }
+    if archive_matches_input(archive, &inputs)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "archive output path is also an input file",
+        ));
+    }
 
     let out = BufWriter::new(File::create(archive)?);
     let mut ar = ArchiveWriter::new(out).map_err(|e| io::Error::other(e.to_string()))?;
@@ -113,6 +119,34 @@ fn create(archive: &Path, roots: &[PathBuf], level: Level) -> io::Result<()> {
     }
     ar.finish().map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
+}
+
+fn archive_matches_input(archive: &Path, inputs: &[(PathBuf, String)]) -> io::Result<bool> {
+    let archive_path = canonical_output_path(archive)?;
+    for (path, _) in inputs {
+        if fs::canonicalize(path)? == archive_path {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn canonical_output_path(path: &Path) -> io::Result<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path);
+    }
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let parent = match parent {
+        Some(p) => fs::canonicalize(p)?,
+        None => std::env::current_dir()?,
+    };
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "archive output path has no filename",
+        )
+    })?;
+    Ok(parent.join(file_name))
 }
 
 fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
@@ -275,22 +309,95 @@ fn walk_dir(dir: &Path, prefix: &str, out: &mut Vec<(PathBuf, String)>) -> io::R
 }
 
 /// Reject archive filenames that would escape the extraction directory.
-/// Strips a leading slash and rejects any `..` segment.
+/// Rejects absolute paths, parent traversal, Windows separators, drive
+/// prefixes, and alternate-data-stream syntax.
 fn sanitize_archive_path(name: &str) -> Option<PathBuf> {
-    let trimmed = name.trim_start_matches('/');
+    if name.is_empty()
+        || name.starts_with('/')
+        || name.starts_with('\\')
+        || name.contains('\\')
+        || name.contains(':')
+    {
+        return None;
+    }
+
+    let path = Path::new(name);
     let mut out = PathBuf::new();
-    for segment in trimmed.split('/') {
-        if segment.is_empty() || segment == "." {
-            continue;
+    for component in path.components() {
+        match component {
+            Component::Normal(segment) => out.push(segment),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
         }
-        if segment == ".." {
-            return None;
-        }
-        out.push(segment);
     }
     if out.as_os_str().is_empty() {
         None
     } else {
         Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizer_accepts_relative_archive_paths() {
+        assert_eq!(
+            sanitize_archive_path("dir/sub/file.txt").unwrap(),
+            PathBuf::from("dir").join("sub").join("file.txt")
+        );
+        assert_eq!(
+            sanitize_archive_path("./file.txt").unwrap(),
+            PathBuf::from("file.txt")
+        );
+    }
+
+    #[test]
+    fn sanitizer_rejects_paths_that_can_escape_or_target_windows_roots() {
+        for name in [
+            "",
+            "/abs.txt",
+            "../evil.txt",
+            "dir/../../evil.txt",
+            r"..\evil.txt",
+            r"C:\tmp\evil.txt",
+            "C:evil.txt",
+            "file.txt:stream",
+        ] {
+            assert!(sanitize_archive_path(name).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn archive_output_matching_input_is_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("same.lzx");
+        fs::write(&input, b"original").unwrap();
+        let inputs = vec![(input.clone(), "same.lzx".to_owned())];
+
+        assert!(archive_matches_input(&input, &inputs).unwrap());
+    }
+
+    #[test]
+    fn create_refuses_to_overwrite_its_own_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("same.lzx");
+        fs::write(&input, b"original").unwrap();
+
+        let err = create(&input, std::slice::from_ref(&input), Level::Normal).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read(&input).unwrap(), b"original");
+    }
+
+    #[test]
+    fn archive_output_in_same_dir_with_different_name_is_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.txt");
+        fs::write(&input, b"original").unwrap();
+        let archive = dir.path().join("out.lzx");
+        let inputs = vec![(input, "input.txt".to_owned())];
+
+        assert!(!archive_matches_input(&archive, &inputs).unwrap());
     }
 }
