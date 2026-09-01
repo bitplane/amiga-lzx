@@ -25,10 +25,11 @@ release:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace --all-targets
+    # The CLI depends on the just-built library version, which is not on
+    # crates.io until the release workflow publishes the library first.
+    cargo publish --dry-run -p amiga-lzx
     git add Cargo.toml crates/amiga-lzx-cli/Cargo.toml Cargo.lock
     git commit -m "release $version"
-    cargo publish --dry-run -p amiga-lzx
-    cargo publish --dry-run -p amiga-lzx-cli
     git tag -a "$tag" -m "$tag"
     git push origin HEAD
     git push origin "$tag"
