@@ -190,8 +190,8 @@ jobs:
 
   # ----------------------------------------------------------------------
   # 4. Publish to crates.io. Requires the `release` environment so the
-  #    CARGO_REGISTRY_TOKEN secret is reachable. Set up environment
-  #    protection rules in repo settings to require manual approval.
+  #    CARGO_REGISTRY_TOKEN secret is reachable. Configure it without
+  #    required reviewers for hands-off releases.
   # ----------------------------------------------------------------------
   publish-crates:
     name: Publish to crates.io
