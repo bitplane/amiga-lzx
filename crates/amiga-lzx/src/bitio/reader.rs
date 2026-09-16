@@ -1,15 +1,7 @@
 //! Bit reader. Inverse of [`BitWriter`].
 //!
-//! Mirrors `unlzx.c`'s `control` / `shift` pair (ALGORITHM.md §10):
-//!
-//! ```text
-//! shift starts at -16
-//! consume(n): value = control & ((1<<n)-1); control >>= n; shift -= n;
-//!             if shift < 0 refill
-//! refill: shift += 16
-//!         control += hi_byte << (8 + shift)
-//!         control += lo_byte << shift
-//! ```
+//! Loads big-endian 16-bit words and consumes their bits least significant
+//! first. Tracks actual buffered bits so EOF cannot manufacture data.
 
 use std::io::Read;
 
@@ -19,9 +11,8 @@ pub struct BitReader<R: Read> {
     inner: R,
     /// Bit accumulator. The next bit to consume is in bit 0.
     control: u32,
-    /// Number of valid bits in `control` minus 16. Starts at -16 so the
-    /// first refill loads two bytes into the high half of the buffer.
-    shift: i32,
+    /// Number of real bits available in `control`.
+    bit_count: u32,
     /// Bytes consumed from the inner reader so far.
     bytes_read: u64,
     /// Sticky end-of-stream marker. After we hit EOF we still allow reads
@@ -34,7 +25,7 @@ impl<R: Read> BitReader<R> {
         BitReader {
             inner,
             control: 0,
-            shift: -16,
+            bit_count: 0,
             bytes_read: 0,
             eof: false,
         }
@@ -48,31 +39,21 @@ impl<R: Read> BitReader<R> {
     /// it into the accumulator. Sets `eof` if no more bytes are available.
     fn refill(&mut self) -> Result<()> {
         if self.eof {
-            // We're already drained; let consumers see whatever's left in
-            // the buffer and decide.
-            self.shift += 16;
             return Ok(());
         }
         let mut buf = [0u8; 2];
         match read_exact_or_eof(&mut self.inner, &mut buf)? {
             2 => {
                 self.bytes_read += 2;
-                self.shift += 16;
-                let s = self.shift;
-                // hi byte goes to bit (8 + s), lo byte to bit s.
-                self.control = self
-                    .control
-                    .wrapping_add((buf[0] as u32) << (8 + s))
-                    .wrapping_add((buf[1] as u32) << s);
+                self.control |= (u16::from_be_bytes(buf) as u32) << self.bit_count;
+                self.bit_count += 16;
             }
             n => {
-                // Odd byte at end of stream: account for it then mark EOF.
                 self.bytes_read += n as u64;
                 self.eof = true;
-                self.shift += 16;
                 if n == 1 {
-                    let s = self.shift;
-                    self.control = self.control.wrapping_add((buf[0] as u32) << (8 + s));
+                    // The missing low byte contains the next bits to decode.
+                    return Err(Error::Truncated);
                 }
             }
         }
@@ -88,13 +69,34 @@ impl<R: Read> BitReader<R> {
         if n == 0 {
             return Ok(0);
         }
-        // Make sure at least 16 bits are present (after ≥1 refill the
-        // accumulator always holds 16+ valid bits unless we hit EOF).
-        while self.shift < 0 {
-            self.refill()?;
+        self.ensure_bits(n)?;
+        if self.bit_count < n {
+            return Err(Error::Truncated);
         }
         let mask = (1u32 << n) - 1;
         Ok(self.control & mask)
+    }
+
+    fn ensure_bits(&mut self, n: u32) -> Result<()> {
+        while self.bit_count < n && !self.eof {
+            self.refill()?;
+        }
+        Ok(())
+    }
+
+    /// Huffman tables need a full root index even when the last symbol's
+    /// code is shorter than the index width. Zero-extend lookahead only;
+    /// consuming the selected code still requires real buffered bits.
+    pub(crate) fn peek_bits_padded(&mut self, n: u32) -> Result<u32> {
+        debug_assert!(n <= 16);
+        if n == 0 {
+            return Ok(0);
+        }
+        self.ensure_bits(n)?;
+        if self.bit_count == 0 {
+            return Err(Error::Truncated);
+        }
+        Ok(self.control & ((1u32 << n) - 1))
     }
 
     /// Consume `n` bits, advancing the bit cursor. `n` may be 0.
@@ -103,11 +105,12 @@ impl<R: Read> BitReader<R> {
         if n == 0 {
             return Ok(());
         }
-        self.control >>= n;
-        self.shift -= n as i32;
-        if self.shift < 0 {
-            self.refill()?;
+        self.ensure_bits(n)?;
+        if self.bit_count < n {
+            return Err(Error::Truncated);
         }
+        self.control >>= n;
+        self.bit_count -= n;
         Ok(())
     }
 
@@ -148,6 +151,38 @@ fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::bitio::BitWriter;
+
+    #[test]
+    fn eof_does_not_supply_zero_bits() {
+        let mut r = BitReader::new(&b""[..]);
+        assert!(matches!(r.read_bits(1), Err(Error::Truncated)));
+        assert!(matches!(r.consume_bits(1), Err(Error::Truncated)));
+        assert_eq!(r.read_bits(0).unwrap(), 0);
+
+        let mut r = BitReader::new(&[0x12, 0x34][..]);
+        assert_eq!(r.read_bits(16).unwrap(), 0x1234);
+        assert!(matches!(r.read_bits(1), Err(Error::Truncated)));
+        assert!(matches!(r.read_bits(1), Err(Error::Truncated)));
+        assert_eq!(r.bytes_read(), 2);
+    }
+
+    #[test]
+    fn odd_byte_cannot_replace_a_complete_word() {
+        let mut r = BitReader::new(&[0x12][..]);
+        assert!(matches!(r.read_bits(1), Err(Error::Truncated)));
+        assert!(matches!(r.read_bits(1), Err(Error::Truncated)));
+        assert_eq!(r.bytes_read(), 1);
+    }
+
+    #[test]
+    fn padded_lookahead_cannot_be_consumed_as_data() {
+        let mut r = BitReader::new(&[0x80, 0x00][..]);
+        r.consume_bits(15).unwrap();
+        assert_eq!(r.peek_bits_padded(12).unwrap(), 1);
+        assert!(matches!(r.consume_bits(2), Err(Error::Truncated)));
+        assert_eq!(r.read_bits(1).unwrap(), 1);
+        assert!(matches!(r.peek_bits_padded(12), Err(Error::Truncated)));
+    }
 
     #[test]
     fn read_back_three_bit_header() {

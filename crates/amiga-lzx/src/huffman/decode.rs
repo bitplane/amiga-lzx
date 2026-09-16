@@ -155,7 +155,7 @@ pub fn decode_symbol<R: std::io::Read>(
     number_symbols: usize,
     table_size: u32,
 ) -> Result<u16> {
-    let root_bits = reader.peek_bits(table_size)?;
+    let root_bits = reader.peek_bits_padded(table_size)?;
     let mut sym = table[root_bits as usize];
     if (sym as usize) < number_symbols {
         let len = lengths[sym as usize] as u32;

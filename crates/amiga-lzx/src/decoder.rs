@@ -280,6 +280,27 @@ mod tests {
     }
 
     #[test]
+    fn truncated_literal_body_is_rejected() {
+        let mut writer = BlockWriter::new(Vec::new());
+        writer
+            .write_block(&vec![crate::lz77::Token::Literal(0); 1000])
+            .unwrap();
+        let (bytes, _) = writer.finish().unwrap();
+        assert_eq!(decode(&bytes, 1000).unwrap(), vec![0; 1000]);
+        // Both an incomplete word and missing whole words must fail, even
+        // though the missing literal codes would all have been zero.
+        for cut in [1, 2, 100, 132] {
+            assert!(
+                matches!(
+                    decode(&bytes[..bytes.len() - cut], 1000),
+                    Err(Error::Truncated)
+                ),
+                "removed {cut} bytes"
+            );
+        }
+    }
+
+    #[test]
     fn single_literal() {
         round_trip(b"x");
     }
