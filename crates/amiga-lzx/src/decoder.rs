@@ -39,6 +39,9 @@ pub struct Decoder<R: Read> {
     block_remaining: u32,
     /// Last-offset cache, used by position slot 0. Initialised to 1.
     last_offset: u32,
+    /// Bytes still to copy from the current match using `last_offset`.
+    /// A caller's output boundary may split a match across multiple calls.
+    match_remaining: usize,
     /// 64 KB circular window of recently emitted bytes.
     window: Vec<u8>,
     /// Cursor into [`Self::window`].
@@ -58,6 +61,7 @@ impl<R: Read> Decoder<R> {
             decrunch_method: 0,
             block_remaining: 0,
             last_offset: 1,
+            match_remaining: 0,
             window: vec![0u8; WINDOW_SIZE],
             window_pos: 0,
             primed: false,
@@ -67,7 +71,8 @@ impl<R: Read> Decoder<R> {
     /// Decode `expected` bytes into the caller-supplied vector. Reads as
     /// many blocks as needed to satisfy the request. Returns `Ok(())` on
     /// success; an error if the stream runs out before producing
-    /// `expected` bytes.
+    /// `expected` bytes. Calls may end inside a match or block; the next
+    /// call resumes there, even if the caller clears or replaces `out`.
     pub fn decode_into(&mut self, out: &mut Vec<u8>, expected: usize) -> Result<()> {
         let target = out.len() + expected;
         while out.len() < target {
@@ -125,6 +130,20 @@ impl<R: Read> Decoder<R> {
 
     fn decode_some(&mut self, out: &mut Vec<u8>, target: usize) -> Result<()> {
         while self.block_remaining > 0 && out.len() < target {
+            if self.match_remaining > 0 {
+                let count = self.match_remaining.min(target - out.len());
+                for _ in 0..count {
+                    let src =
+                        (self.window_pos + WINDOW_SIZE - self.last_offset as usize) & WINDOW_MASK;
+                    let b = self.window[src];
+                    out.push(b);
+                    self.window[self.window_pos] = b;
+                    self.window_pos = (self.window_pos + 1) & WINDOW_MASK;
+                }
+                self.match_remaining -= count;
+                self.block_remaining -= count as u32;
+                continue;
+            }
             let symbol = decode_symbol(
                 &mut self.reader,
                 &self.literal_table,
@@ -189,21 +208,7 @@ impl<R: Read> Decoder<R> {
                 if length as u32 > self.block_remaining {
                     return Err(Error::InvalidArchive("match runs past block end"));
                 }
-                if out.len() + length > target {
-                    return Err(Error::InvalidArchive(
-                        "decoded data exceeds expected length",
-                    ));
-                }
-
-                // Copy `length` bytes from `dist` behind window_pos.
-                for _ in 0..length {
-                    let src = (self.window_pos + WINDOW_SIZE - dist as usize) & WINDOW_MASK;
-                    let b = self.window[src];
-                    out.push(b);
-                    self.window[self.window_pos] = b;
-                    self.window_pos = (self.window_pos + 1) & WINDOW_MASK;
-                }
-                self.block_remaining -= length as u32;
+                self.match_remaining = length;
             }
         }
         let _ = TABLE_THREE; // not used directly here; kept for reference
@@ -217,6 +222,13 @@ pub fn decode(input: &[u8], expected: usize) -> Result<Vec<u8>> {
     let mut dec = Decoder::new(std::io::Cursor::new(input));
     let mut out = Vec::with_capacity(expected);
     dec.decode_into(&mut out, expected)?;
+    // Unlike a streaming call, this helper promises the complete payload.
+    // Preserve archive size validation when the final request splits a match.
+    if dec.block_remaining != 0 {
+        return Err(Error::InvalidArchive(
+            "decoded data exceeds expected length",
+        ));
+    }
     Ok(out)
 }
 
@@ -371,5 +383,59 @@ mod tests {
             err,
             Error::InvalidArchive("decoded data exceeds expected length")
         ));
+    }
+
+    #[test]
+    fn streaming_decode_resumes_an_overlapping_match_in_a_new_buffer() {
+        use crate::lz77::Token;
+        let mut writer = BlockWriter::new(Vec::new());
+        writer
+            .write_block(&[
+                Token::Literal(b'A'),
+                Token::Match {
+                    length: 20,
+                    distance: 1,
+                },
+            ])
+            .unwrap();
+        let (bytes, _) = writer.finish().unwrap();
+        let mut decoder = Decoder::new(&bytes[..]);
+        let mut first = vec![b'!'];
+        decoder.decode_into(&mut first, 5).unwrap();
+        assert_eq!(first, b"!AAAAA");
+        decoder.decode_into(&mut first, 0).unwrap();
+        assert_eq!(first, b"!AAAAA");
+        let mut rest = Vec::new();
+        decoder.decode_into(&mut rest, 16).unwrap();
+        assert_eq!(rest, vec![b'A'; 16]);
+        assert!(matches!(
+            decoder.decode_into(&mut rest, 1),
+            Err(Error::Truncated) | Err(Error::InvalidArchive(_))
+        ));
+    }
+
+    #[test]
+    fn chunked_decode_crosses_blocks_and_wraps_the_window() {
+        let input: Vec<u8> = b"abracadabra!"
+            .iter()
+            .copied()
+            .cycle()
+            .take(70_000)
+            .collect();
+        let tokens = lz77_encode(&input, &LEVEL_NORMAL);
+        let mut writer = BlockWriter::new(Vec::new());
+        for block in tokens.chunks(37) {
+            writer.write_block(block).unwrap();
+        }
+        let (bytes, _) = writer.finish().unwrap();
+        for chunk_size in [1, 5, 257, 4096] {
+            let mut decoder = Decoder::new(&bytes[..]);
+            let mut output = Vec::new();
+            while output.len() < input.len() {
+                let count = chunk_size.min(input.len() - output.len());
+                decoder.decode_into(&mut output, count).unwrap();
+            }
+            assert_eq!(output, input, "chunk size {chunk_size}");
+        }
     }
 }
