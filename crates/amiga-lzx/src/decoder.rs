@@ -88,6 +88,9 @@ impl<R: Read> Decoder<R> {
         if method == 0 || method > 3 {
             return Err(Error::InvalidArchive("unknown block type"));
         }
+        if method == 1 && !self.primed {
+            return Err(Error::InvalidArchive("tree reuse before first tree"));
+        }
         self.decrunch_method = method;
 
         // Type 3: 8 × 3 bits aligned-offset code lengths, then build table.
@@ -220,9 +223,41 @@ pub fn decode(input: &[u8], expected: usize) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bitio::BitWriter;
     use crate::block::BlockWriter;
     use crate::constants::{LEVEL_MAX, LEVEL_NORMAL, LEVEL_QUICK};
     use crate::lz77::encode as lz77_encode;
+
+    #[test]
+    fn first_block_cannot_reuse_an_uninitialized_tree() {
+        let mut writer = BitWriter::new(Vec::new());
+        writer.write_bits(1, 3).unwrap();
+        writer.write_bits(0, 8).unwrap();
+        writer.write_bits(0, 8).unwrap();
+        writer.write_bits(1, 8).unwrap();
+        let (bytes, _) = writer.finish().unwrap();
+        assert!(matches!(
+            decode(&bytes, 1),
+            Err(Error::InvalidArchive("tree reuse before first tree"))
+        ));
+    }
+
+    #[test]
+    fn subsequent_block_can_reuse_a_valid_tree() {
+        let mut writer = BlockWriter::new(Vec::new());
+        writer
+            .write_block(&[crate::lz77::Token::Literal(0)])
+            .unwrap();
+        // The single-literal tree has one-bit codes for symbols 0 and 1.
+        // Append a type-1 block before padding the stream to a word boundary.
+        writer.bit_writer.write_bits(1, 3).unwrap();
+        writer.bit_writer.write_bits(0, 8).unwrap();
+        writer.bit_writer.write_bits(0, 8).unwrap();
+        writer.bit_writer.write_bits(1, 8).unwrap();
+        writer.bit_writer.write_bits(0, 1).unwrap();
+        let (bytes, _) = writer.finish().unwrap();
+        assert_eq!(decode(&bytes, 2).unwrap(), [0, 0]);
+    }
 
     fn round_trip(input: &[u8]) {
         for level in [LEVEL_QUICK, LEVEL_NORMAL, LEVEL_MAX] {
