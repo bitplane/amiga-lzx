@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 amiga-lzx = { path = "../amiga-lzx", version = "0.1.4" }
+cap-std = "3"
 clap.workspace = true
 
 [dev-dependencies]

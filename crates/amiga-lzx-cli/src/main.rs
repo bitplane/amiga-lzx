@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryBuilder, Level};
+use cap_std::fs::{Dir, OpenOptions};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -151,6 +152,7 @@ fn canonical_output_path(path: &Path) -> io::Result<PathBuf> {
 
 fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
     fs::create_dir_all(outdir)?;
+    let destination = Dir::open_ambient_dir(outdir, cap_std::ambient_authority())?;
     let mut reader = open_reader(archive)?;
     while let Some(entry) = reader
         .next_entry()
@@ -164,24 +166,50 @@ fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
                 format!("unsafe archive path: {}", entry.filename),
             )
         })?;
-        let dst = outdir.join(&safe_name);
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)?;
+        reject_symlink_components(&destination, &safe_name)?;
+        if let Some(parent) = safe_name.parent().filter(|p| !p.as_os_str().is_empty()) {
+            destination.create_dir_all(parent)?;
         }
-        fs::write(&dst, &entry.data)?;
+        // All lookups are confined to the opened destination directory,
+        // including if a component is replaced after the symlink check.
+        let mut file = destination
+            .open_with(
+                &safe_name,
+                OpenOptions::new().write(true).create(true).truncate(true),
+            )?
+            .into_std();
+        file.write_all(&entry.data)?;
 
         // Restore mtime from the entry header. Best-effort — failures
         // here don't abort the whole extraction.
         let mtime = entry.datetime.to_system_time();
-        if let Err(e) = File::options()
-            .write(true)
-            .open(&dst)
-            .and_then(|f| f.set_modified(mtime))
-        {
-            eprintln!("warning: could not set mtime on {}: {e}", dst.display());
+        if let Err(e) = file.set_modified(mtime) {
+            eprintln!(
+                "warning: could not set mtime on {}: {e}",
+                outdir.join(&safe_name).display()
+            );
         }
 
         eprintln!("  - {} ({} bytes)", entry.filename, entry.data.len());
+    }
+    Ok(())
+}
+
+fn reject_symlink_components(destination: &Dir, name: &Path) -> io::Result<()> {
+    let mut prefix = PathBuf::new();
+    for component in name.components() {
+        prefix.push(component);
+        match destination.symlink_metadata(&prefix) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "symlink in extraction path",
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        }
     }
     Ok(())
 }
@@ -340,6 +368,61 @@ fn sanitize_archive_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_test_archive(path: &Path, name: &str) {
+        let mut writer = ArchiveWriter::new(File::create(path).unwrap()).unwrap();
+        let mut entry = writer.add_entry(EntryBuilder::new(name)).unwrap();
+        entry.write_all(b"archive content").unwrap();
+        entry.finish().unwrap();
+        writer.finish().unwrap();
+    }
+
+    #[test]
+    fn extract_creates_nested_files_and_overwrites_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("archive.lzx");
+        let out = dir.path().join("out");
+        write_test_archive(&archive, "nested/file");
+        extract(&archive, &out).unwrap();
+        fs::write(out.join("nested/file"), b"old").unwrap();
+        extract(&archive, &out).unwrap();
+        assert_eq!(
+            fs::read(out.join("nested/file")).unwrap(),
+            b"archive content"
+        );
+        assert_eq!(
+            fs::metadata(out.join("nested/file"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            DateTime::ZERO.to_system_time()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_rejects_file_and_directory_symlinks() {
+        use std::os::unix::fs::symlink;
+        for directory_link in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let archive = dir.path().join("archive.lzx");
+            let out = dir.path().join("out");
+            let outside = dir.path().join("outside");
+            fs::create_dir(&out).unwrap();
+            fs::create_dir(&outside).unwrap();
+            let victim = outside.join("file");
+            fs::write(&victim, b"preserve me").unwrap();
+            if directory_link {
+                symlink(&outside, out.join("link")).unwrap();
+                write_test_archive(&archive, "link/file");
+            } else {
+                symlink(&victim, out.join("file")).unwrap();
+                write_test_archive(&archive, "file");
+            }
+            assert!(extract(&archive, &out).is_err());
+            assert_eq!(fs::read(&victim).unwrap(), b"preserve me");
+        }
+    }
 
     #[test]
     fn sanitizer_accepts_relative_archive_paths() {
