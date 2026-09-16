@@ -21,6 +21,7 @@ path = "src/main.rs"
 amiga-lzx = { path = "../amiga-lzx", version = "0.1.4" }
 cap-std = "3"
 clap.workspace = true
+same-file = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

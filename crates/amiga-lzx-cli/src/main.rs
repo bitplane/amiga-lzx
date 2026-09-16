@@ -123,31 +123,19 @@ fn create(archive: &Path, roots: &[PathBuf], level: Level) -> io::Result<()> {
 }
 
 fn archive_matches_input(archive: &Path, inputs: &[(PathBuf, String)]) -> io::Result<bool> {
-    let archive_path = canonical_output_path(archive)?;
+    // Paths alone do not identify a file: distinct hard links have different
+    // canonical paths but would both be truncated by File::create.
+    let archive_handle = match same_file::Handle::from_path(archive) {
+        Ok(handle) => handle,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
     for (path, _) in inputs {
-        if fs::canonicalize(path)? == archive_path {
+        if same_file::Handle::from_path(path)? == archive_handle {
             return Ok(true);
         }
     }
     Ok(false)
-}
-
-fn canonical_output_path(path: &Path) -> io::Result<PathBuf> {
-    if path.exists() {
-        return fs::canonicalize(path);
-    }
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-    let parent = match parent {
-        Some(p) => fs::canonicalize(p)?,
-        None => std::env::current_dir()?,
-    };
-    let file_name = path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "archive output path has no filename",
-        )
-    })?;
-    Ok(parent.join(file_name))
 }
 
 fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
@@ -469,6 +457,34 @@ mod tests {
         fs::write(&input, b"original").unwrap();
 
         let err = create(&input, std::slice::from_ref(&input), Level::Normal).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read(&input).unwrap(), b"original");
+    }
+
+    #[test]
+    fn create_refuses_a_hard_link_to_its_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.txt");
+        let archive = dir.path().join("alias.lzx");
+        fs::write(&input, b"original").unwrap();
+        fs::hard_link(&input, &archive).unwrap();
+
+        let err = create(&archive, std::slice::from_ref(&input), Level::Normal).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read(&input).unwrap(), b"original");
+        assert_eq!(fs::read(&archive).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_refuses_a_symlink_to_its_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.txt");
+        let archive = dir.path().join("alias.lzx");
+        fs::write(&input, b"original").unwrap();
+        std::os::unix::fs::symlink(&input, &archive).unwrap();
+
+        let err = create(&archive, std::slice::from_ref(&input), Level::Normal).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(fs::read(&input).unwrap(), b"original");
     }
