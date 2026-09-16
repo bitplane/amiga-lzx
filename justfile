@@ -1,4 +1,5 @@
-# Bump the patch version, verify it, commit, tag, and publish the refs.
+# Bump the patch version, verify it, commit, and push the release tag.
+# The tag triggers .github/workflows/release.yml to publish both crates.
 release:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -25,9 +26,6 @@ release:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace --all-targets
-    # The CLI depends on the just-built library version, which is not on
-    # crates.io until the release workflow publishes the library first.
-    cargo publish --dry-run -p amiga-lzx
     git add Cargo.toml crates/amiga-lzx-cli/Cargo.toml Cargo.lock
     git commit -m "release $version"
     git tag -a "$tag" -m "$tag"
