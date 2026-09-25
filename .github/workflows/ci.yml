@@ -51,3 +51,25 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --all-targets
+
+  aros:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-aros, i386-aros, aarch64-aros]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build in Mountin AROS toolbox
+        run: scripts/aros/build.sh "${{ matrix.target }}"
