@@ -19,9 +19,20 @@ path = "src/main.rs"
 
 [dependencies]
 amiga-lzx = { path = "../amiga-lzx", version = "0.1.5" }
-cap-std = "3"
 clap.workspace = true
 same-file = "1"
 
+# cap-std sits on rustix, which has no AROS backend; see src/destination.rs.
+[target.'cfg(not(target_os = "aros"))'.dependencies]
+cap-std = "3"
+
+# AROS sets file times by path; its libc module comes from the toolbox.
+[target.'cfg(target_os = "aros")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile.workspace = true
+
+[lints.rust]
+# AROS is a patched-in target, unknown to stock rustc's cfg checking.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("aros"))'] }

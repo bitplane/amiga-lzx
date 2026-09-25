@@ -3,8 +3,10 @@ use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
+mod destination;
+use destination::Destination;
+
 use amiga_lzx::{ArchiveReader, ArchiveWriter, DateTime, EntryBuilder, Level};
-use cap_std::fs::{Dir, OpenOptions};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -140,7 +142,7 @@ fn archive_matches_input(archive: &Path, inputs: &[(PathBuf, String)]) -> io::Re
 
 fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
     fs::create_dir_all(outdir)?;
-    let destination = Dir::open_ambient_dir(outdir, cap_std::ambient_authority())?;
+    let destination = Destination::open(outdir)?;
     let mut reader = open_reader(archive)?;
     while let Some(entry) = reader
         .next_entry()
@@ -158,20 +160,13 @@ fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
         if let Some(parent) = safe_name.parent().filter(|p| !p.as_os_str().is_empty()) {
             destination.create_dir_all(parent)?;
         }
-        // All lookups are confined to the opened destination directory,
-        // including if a component is replaced after the symlink check.
-        let mut file = destination
-            .open_with(
-                &safe_name,
-                OpenOptions::new().write(true).create(true).truncate(true),
-            )?
-            .into_std();
+        let mut file = destination.create_file(&safe_name)?;
         file.write_all(&entry.data)?;
 
         // Restore mtime from the entry header. Best-effort — failures
         // here don't abort the whole extraction.
         let mtime = entry.datetime.to_system_time();
-        if let Err(e) = file.set_modified(mtime) {
+        if let Err(e) = destination.set_modified(file, &safe_name, mtime) {
             eprintln!(
                 "warning: could not set mtime on {}: {e}",
                 outdir.join(&safe_name).display()
@@ -183,18 +178,18 @@ fn extract(archive: &Path, outdir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn reject_symlink_components(destination: &Dir, name: &Path) -> io::Result<()> {
+fn reject_symlink_components(destination: &Destination, name: &Path) -> io::Result<()> {
     let mut prefix = PathBuf::new();
     for component in name.components() {
         prefix.push(component);
-        match destination.symlink_metadata(&prefix) {
-            Ok(meta) if meta.file_type().is_symlink() => {
+        match destination.is_symlink(&prefix) {
+            Ok(true) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "symlink in extraction path",
                 ));
             }
-            Ok(_) => {}
+            Ok(false) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         }

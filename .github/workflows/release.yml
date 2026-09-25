@@ -189,6 +189,42 @@ jobs:
           retention-days: 7
 
   # ----------------------------------------------------------------------
+  # 3b. Cross-compile AROS packages in Mountin's compiler toolboxes.
+  # ----------------------------------------------------------------------
+  aros:
+    name: Build ${{ matrix.target }}
+    needs: [verify-tag, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-aros, i386-aros, aarch64-aros]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build in Mountin AROS toolbox
+        run: scripts/aros/build.sh "${{ matrix.target }}"
+
+      - name: Package
+        run: scripts/aros/package.sh "${{ matrix.target }}" "${{ needs.verify-tag.outputs.version }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BIN_NAME }}-${{ needs.verify-tag.outputs.version }}-${{ matrix.target }}
+          path: dist/*.tar.bz2
+          if-no-files-found: error
+          retention-days: 7
+
+  # ----------------------------------------------------------------------
   # 4. Publish to crates.io. Requires the `release` environment so the
   #    CARGO_REGISTRY_TOKEN secret is reachable. Configure it without
   #    required reviewers for hands-off releases.
@@ -223,7 +259,7 @@ jobs:
   # ----------------------------------------------------------------------
   github-release:
     name: GitHub release
-    needs: [verify-tag, build, publish-crates]
+    needs: [verify-tag, build, aros, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -247,4 +283,24 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             artifacts/**/*.tar.gz
+            artifacts/**/*.tar.bz2
             artifacts/**/*.zip
+
+  # ----------------------------------------------------------------------
+  # 6. Push the released AROS archives to the bitplane Pkg channel.
+  # ----------------------------------------------------------------------
+  sync-aros:
+    name: Sync ${{ matrix.target }} to Pkg
+    needs: github-release
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-aros, i386-aros, aarch64-aros]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/sync-aros.yml
+    with:
+      tag: ${{ github.ref_name }}
+      target: ${{ matrix.target }}
+    secrets:
+      AROS_PKG_KEY: ${{ secrets.AROS_PKG_KEY }}
