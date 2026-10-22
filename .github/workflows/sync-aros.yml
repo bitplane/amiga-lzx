@@ -1,0 +1,82 @@
+name: Sync AROS package
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+    secrets:
+      AROS_PKG_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.1.6
+        required: true
+        type: string
+      target:
+        description: Package to sync
+        required: true
+        type: choice
+        options:
+          - i386-aros
+          - aarch64-aros
+          - x86_64-aros
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    # The portal shares upload staging between pushes to the same channel.
+    concurrency:
+      group: aros-pkg-bitplane
+      queue: max
+    # Portal/tool failures must never invalidate the GitHub release.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download published archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          case "$TARGET" in
+            i386-aros|aarch64-aros|x86_64-aros) ;;
+            *) exit 1 ;;
+          esac
+          archive="lzx-${TAG#v}-$TARGET.tar.bz2"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$archive" --dir dist
+          echo "ARCHIVE=dist/$archive" >> "$GITHUB_ENV"
+      - name: Build pkg
+        run: |
+          pkg_source="$RUNNER_TEMP/aros-pkg"
+          git init "$pkg_source"
+          git -C "$pkg_source" fetch --depth=1 https://github.com/jonx/aros-pkg.git a7cb77b6843205ebeca3997adaeebdfc626aab2e
+          git -C "$pkg_source" checkout --detach FETCH_HEAD
+          # Keep the pinned tool building until upstream fixes its HTTP redirect warning.
+          make -C "$pkg_source" build/pkg CFLAGS="-std=c99 -Wall -Wextra -Werror -Wno-error=restrict -O2"
+      - name: Sign and publish
+        env:
+          AROS_PKG_KEY: ${{ secrets.AROS_PKG_KEY }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          test -n "$AROS_PKG_KEY"
+          umask 077
+          export PKG_SIGNKEY="$RUNNER_TEMP/aros-pkg.key"
+          trap 'rm -f "$PKG_SIGNKEY"' EXIT
+          printf '%s' "$AROS_PKG_KEY" > "$PKG_SIGNKEY"
+          unset AROS_PKG_KEY
+          export PKG="$RUNNER_TEMP/aros-pkg/build/pkg"
+          sh scripts/aros/publish.sh "$ARCHIVE" "$TAG"
+      - name: Report sync failure
+        if: failure()
+        run: |
+          echo '::warning::AROS pkg sync failed. GitHub release assets remain available; retry with the Sync AROS package workflow.'
+          echo 'Pkg sync failed. Retry **Sync AROS package** with this release tag and target; no rebuild is needed.' >> "$GITHUB_STEP_SUMMARY"

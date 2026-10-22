@@ -25,6 +25,7 @@ dependencies = [
  "amiga-lzx",
  "cap-std",
  "clap",
+ "libc",
  "same-file",
  "tempfile",
 ]

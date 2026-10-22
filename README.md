@@ -16,7 +16,9 @@ cargo install amiga-lzx-cli
 
 This installs a binary called `lzx` (the historic Amiga tool name).
 Pre-built binaries for Linux (x86_64 / aarch64), macOS (universal),
-and Windows are also attached to each [GitHub release][releases].
+Windows, and AROS (x86_64 / i386 / aarch64) are also attached to each
+[GitHub release][releases]. On AROS, `lzx` is also published to the
+bitplane channel of [Pkg](https://github.com/jonx/aros-pkg).
 
 [releases]: https://github.com/bitplane/amiga-lzx/releases
 
